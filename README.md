@@ -1,6 +1,8 @@
 # Wakatta — Japanese Understanding App
 
-A local-first tool for extracting, studying, and practicing Japanese from manga and literature. Feed in scanned pages; get a structured study deck with kanji breakdown, stroke practice, and SRS-driven review.
+A local-first tool for extracting, studying, and practicing Japanese from manga and literature.
+Feed in scanned pages; get a structured study deck with kanji breakdown, stroke practice,
+and SRS-driven review.
 
 Initial target: **Nausicaä of the Valley of the Wind** (manga).
 
@@ -11,19 +13,73 @@ Initial target: **Nausicaä of the Valley of the Wind** (manga).
 | Layer | Choice |
 |---|---|
 | OCR | `manga-ocr` (ViT-based, CUDA-accelerated) |
-| Text region detection | `comic-text-detector` |
-| Tokenization | `fugashi` + MeCab |
+| Text region detection | Custom CTD inference (`ctd.py`) using `comictextdetector.pt.onnx` |
+| Tokenization | `fugashi` + MeCab (Unidic) |
 | Database | SQLite + SQLAlchemy |
-| Backend API | FastAPI |
-| Frontend | React + HTML5 Canvas |
+| Backend API | FastAPI + uvicorn |
+| Frontend | HTML5 Canvas (PWA target) |
 | SRS algorithm | FSRS |
-| Kanji data | KanjiVG + KANJIDIC2 |
+| Kanji stroke data | KanjiVG + KANJIDIC2 |
+| Handwriting recognition | KanjiVG + DTW (`kanjivg_db.py`) |
 
-Runs locally on a machine with a 4090 GPU. No cloud dependencies.
+Primary machine: 4090 GPU, Arch Linux. Also runs on Framework 12 (CPU-only, slower).
 
 ---
 
-## Data Model
+## What's Built
+
+### OCR Pipeline (`main.py`)
+- PDF page → `PyMuPDF` → image
+- Image → `ctd.py` (CTD ONNX model) → text region bounding boxes
+- Each region → `manga-ocr` → Japanese string
+- String → `fugashi` → tokenized words with readings and POS
+
+### Handwriting Recognition Webapp (`server.py` + `static/index.html`)
+- FastAPI server loads KanjiVG stroke database on startup
+- HTML5 Canvas captures stylus/pointer strokes
+- Strokes POSTed to `/recognize` → DTW comparison against KanjiVG → top candidates
+- User clicks candidate to confirm; canvas clears for next character
+- KanjiVG data: 6700+ characters including kanji, hiragana, katakana, punctuation
+
+### KanjiVG Database (`kanjivg_db.py`)
+- Parses KanjiVG SVGs (lxml), samples stroke paths, normalizes to `[0,1]`
+- Per-SVG `.npy` cache in `data/kanjivg_parsed/` — survives interrupted loads
+- Full `.npz` cache in `data/kanjivg_cache.npz` — fast startup after first parse
+- DTW-based recognition with stroke-count pre-filtering
+
+### Custom CTD Inference (`ctd.py`)
+- Minimal reimplementation of comic-text-detector inference
+- CPU: ONNX model via `cv2.dnn` (no CUDA OpenCV needed)
+- GPU path: swap to `onnxruntime-gpu` with `CUDAExecutionProvider` (~5 lines)
+
+---
+
+## Setup
+
+```bash
+# Install uv (https://docs.astral.sh/uv/)
+uv sync
+
+# Download KanjiVG stroke data
+uv run setup_kanjivg.py
+
+# Start handwriting recognition server
+uv run uvicorn server:app --reload --port 8000
+# Then open http://localhost:8000
+
+# Run OCR pipeline on a manga page (edit PAGE_NUM in main.py first)
+uv run main.py
+```
+
+Models download automatically on first run:
+- `manga-ocr` weights from HuggingFace (~444MB, cached in `~/.cache/huggingface/`)
+- CTD ONNX model from GitHub releases (~50MB, cached in `models/`)
+
+For fully offline use after initial setup: set `HF_HUB_OFFLINE=1`.
+
+---
+
+## Data Model (planned)
 
 ```
 Work
@@ -33,91 +89,60 @@ Work
                     └── Word (canonical entry, deduplicated by dictionary form)
                           ├── reading (hiragana pronunciation)
                           ├── pitch accent
-                          ├── example sentence (pulled from source)
                           └── KanjiComponent (per kanji in the word)
                                 ├── radicals (from KANJIDIC2/KRADFILE)
-                                └── stroke order (from KanjiVG SVGs)
+                                └── stroke order (from KanjiVG)
 ```
 
 ---
 
-## Subsystems
+## Subsystems (planned)
 
-### 1. Ingestion & OCR
-- Input: PNG or PDF page
-- `comic-text-detector` finds text regions (bubbles, captions) with bounding boxes
-- `manga-ocr` reads each region → Japanese string
-- Output: text organized by region, ordered by reading direction
-
-### 2. Text Segmentation & Word Analysis
-- `fugashi` + MeCab tokenizes raw Japanese string (no spaces in Japanese)
-- Each token: surface form, dictionary form, reading (yomi), part of speech
-- Pitch accent: separate lookup via OJAD or accent dictionary
-- Words deduplicated into canonical `Word` records across the whole work
-
-### 3. Kanji Decomposition
-- Per kanji character in a word:
-  - Radicals from KANJIDIC2 / KRADFILE
-  - Stroke order SVG paths from KanjiVG (numbered strokes with direction)
-- Animated stroke display in the study UI
-
-### 4. Study Coverage Engine
+### Study Coverage Engine
 - Tracks which words the user has confirmed as known
 - For any unit (sentence / page / work): `coverage = known ∩ unit_words / unit_words`
-- Surfaces the minimum word set needed to unlock a unit
-- "You need 8 more words to read this page"
+- Surfaces the minimum word set to unlock a unit: "You need 8 more words to read this page"
 
-### 5. SRS (Spaced Repetition)
+### SRS (Spaced Repetition)
 - All extracted words enter the study deck automatically
 - FSRS algorithm schedules reviews
-- User confirms a word is known through the review interface
-- Known words appear far less frequently; unknown words surface more often
-- Each card shows: spelling, reading, pitch, example sentence from source
+- Each card: spelling, reading, pitch accent, example sentence from source material
+- Known words surface rarely; unknown words surface often
 
-### 6. Writing Practice
-- HTML5 Canvas captures stylus input as stroke sequences (Pointer Events API)
-- User rewrites the presented kanji
-- Validation against KanjiVG canonical strokes checks:
+### Stroke Validation
+- Same KanjiVG DTW infrastructure used for recognition repurposed for validation
+- When user practises writing a known character, check:
   - **Order**: strokes drawn in wrong sequence
-  - **Direction**: stroke drawn against the canonical direction (start/end point comparison)
-  - **Shape**: loose path similarity (DTW or Fréchet distance)
+  - **Direction**: stroke drawn against canonical direction
+  - **Shape**: path similarity via DTW
 
 ---
 
-## Build Order
+## Next Steps
 
-| Phase | POC | Goal |
-|---|---|---|
-| 1 | OCR pipeline | Image → structured Japanese text (manga-ocr + comic-text-detector + fugashi) |
-| 2 | Data model + ingestion | Persist Work/Page/Sentence/Word hierarchy in SQLite |
-| 3 | Study deck + SRS | FSRS cards per word, review UI with reading/example sentence |
-| 4 | Kanji panel | Radical breakdown + animated stroke order from KanjiVG |
-| 5 | Writing practice | Canvas stroke capture + validation against KanjiVG |
+### Immediate
+- [ ] **PWA offline mode** — see `plan.md`. Move recognition client-side (JS port of DTW),
+      add service worker + manifest so the app installs and works on an iPad without
+      server connection after first load.
 
-POCs 4 and 5 can be developed in parallel with POC 3.
+### Pipeline
+- [ ] **SQLite data model** — implement Work/Page/Sentence/Word schema with SQLAlchemy
+- [ ] **Ingestion endpoint** — FastAPI route that accepts a PDF, runs the OCR pipeline,
+      persists results to the database
+- [ ] **Study deck** — connect ingested words to FSRS review cards
 
----
+### Kanji
+- [ ] **KANJIDIC2 integration** — radical breakdown per kanji character
+- [ ] **Animated stroke order** — render KanjiVG SVG strokes sequentially in the UI
+- [ ] **Stroke validation** — reuse DTW for practice checking (order, direction, shape)
 
-## POC 1 Target Output
+### GPU
+- [ ] **Switch CTD to `onnxruntime-gpu`** on the 4090 machine for faster detection
+- [ ] **`HF_HOME=./models`** — consolidate all model weights into the project directory
+      for easy portability between machines
 
-Given one Nausicaä page image, print:
-
-```
-Page: nausicaa_v1_p042.png
-
-Sentence 1: 風の谷のナウシカ
-  風  → kaze  / かぜ  (noun)
-  の  → no    / の    (particle)
-  谷  → tani  / たに  (noun)
-  の  → no    / の    (particle)
-  ナウシカ → Naushika / ナウシカ (proper noun)
-
-Sentence 2: ...
-```
-
-No database, no frontend — just proving the OCR and tokenization pipeline work on real manga content.
-
-### POC 1 Requirements
-- Scan or digital image of a Nausicaä page
-- Python environment with: `manga-ocr`, `comic-text-detector`, `fugashi`, MeCab system library
-- CUDA available (4090) for fast inference
+### Quality
+- [ ] **Bounding box correction UI** — web interface for manually adjusting detected
+      text regions on a manga page and transcribing text if OCR fails (pen input
+      serves double duty as study and correction)
+- [ ] **Pitch accent** — add OJAD or accent dictionary lookup to word analysis
