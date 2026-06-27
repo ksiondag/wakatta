@@ -13,5 +13,8 @@ page_sample.png
 page_regions.png
 *_regions.png
 
+# Generated (rebuilt from KanjiVG cache on server startup)
+static/db.json
+
 # Vendor (cloned separately)
 vendor/

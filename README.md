@@ -34,10 +34,11 @@ Primary machine: 4090 GPU, Arch Linux. Also runs on Framework 12 (CPU-only, slow
 - Each region → `manga-ocr` → Japanese string
 - String → `fugashi` → tokenized words with readings and POS
 
-### Handwriting Recognition Webapp (`server.py` + `static/index.html`)
-- FastAPI server loads KanjiVG stroke database on startup
+### Handwriting Recognition Webapp (`server.py` + `static/`)
+- FastAPI server loads KanjiVG stroke database on startup, generates `static/db.json`
 - HTML5 Canvas captures stylus/pointer strokes
-- Strokes POSTed to `/recognize` → DTW comparison against KanjiVG → top candidates
+- Recognition runs **client-side** in `recognizer.js` (JS port of DTW pipeline) — no server needed after first load
+- PWA: service worker caches app shell + `db.json`; works fully offline after initial visit
 - User clicks candidate to confirm; canvas clears for next character
 - KanjiVG data: 6700+ characters including kanji, hiragana, katakana, punctuation
 
@@ -119,11 +120,6 @@ Work
 ---
 
 ## Next Steps
-
-### Immediate
-- [ ] **PWA offline mode** — see `plan.md`. Move recognition client-side (JS port of DTW),
-      add service worker + manifest so the app installs and works on an iPad without
-      server connection after first load.
 
 ### Pipeline
 - [ ] **SQLite data model** — implement Work/Page/Sentence/Word schema with SQLAlchemy

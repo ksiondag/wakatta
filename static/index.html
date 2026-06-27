@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Wakatta — Handwriting</title>
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#1a1a2e">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -109,9 +111,26 @@
     color: #666;
     text-align: center;
   }
+
+  #connection-badge {
+    position: fixed;
+    top: 10px;
+    right: 12px;
+    font-size: 0.7rem;
+    padding: 3px 8px;
+    border-radius: 10px;
+    background: #2a2a3e;
+    border: 1px solid #444;
+    color: #888;
+    pointer-events: none;
+  }
+  #connection-badge.offline { color: #f0a060; border-color: #665030; }
+  #connection-badge.online  { color: #60c080; border-color: #305030; }
 </style>
 </head>
 <body>
+
+<div id="connection-badge">loading</div>
 
 <h1>わかった — Handwriting Recognition</h1>
 
@@ -122,7 +141,7 @@
 <div id="controls">
   <button id="clear-btn">Clear</button>
   <span id="stroke-count">0 strokes</span>
-  <span id="status">Draw a character</span>
+  <span id="status">Loading database…</span>
 </div>
 
 <div id="candidates"></div>
@@ -130,25 +149,63 @@
 <div id="confirmed-label">Confirmed</div>
 <div id="confirmed"></div>
 
-<script>
+<script type="module">
+import { loadDb, recognize } from '/static/recognizer.js';
+
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const candidatesEl = document.getElementById('candidates');
 const statusEl = document.getElementById('status');
 const strokeCountEl = document.getElementById('stroke-count');
 const confirmedEl = document.getElementById('confirmed');
+const badgeEl = document.getElementById('connection-badge');
 
 ctx.strokeStyle = '#e8e8ff';
 ctx.lineWidth = 3;
 ctx.lineCap = 'round';
 ctx.lineJoin = 'round';
 
-let strokes = [];        // completed strokes: [{x,y}, ...]
-let currentStroke = [];  // in-progress stroke
-let drawing = false;
-let recognizeTimer = null;
+// --- Connection badge ---
+
+function updateBadge() {
+  if (navigator.onLine) {
+    badgeEl.textContent = 'online';
+    badgeEl.className = 'online';
+  } else {
+    badgeEl.textContent = 'offline';
+    badgeEl.className = 'offline';
+  }
+}
+updateBadge();
+window.addEventListener('online', updateBadge);
+window.addEventListener('offline', updateBadge);
+
+// --- Load KanjiVG database ---
+
+let db = null;
+
+try {
+  db = await loadDb('/static/db.json');
+  statusEl.textContent = 'Draw a character';
+} catch (err) {
+  statusEl.textContent = 'DB load failed';
+  console.error('Failed to load db.json:', err);
+}
+
+// --- Service worker ---
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/static/sw.js').catch(err => {
+    console.warn('SW registration failed:', err);
+  });
+}
 
 // --- Drawing ---
+
+let strokes = [];
+let currentStroke = [];
+let drawing = false;
+let recognizeTimer = null;
 
 function getPos(e) {
   const rect = canvas.getBoundingClientRect();
@@ -193,60 +250,47 @@ canvas.addEventListener('pointerup', e => {
   }
   currentStroke = [];
   clearTimeout(recognizeTimer);
-  recognizeTimer = setTimeout(sendForRecognition, 700);
+  recognizeTimer = setTimeout(runRecognition, 700);
 });
 
 canvas.addEventListener('pointerleave', e => {
   if (drawing) canvas.dispatchEvent(new PointerEvent('pointerup', e));
 });
 
-// Prevent scroll on touch devices while drawing
 canvas.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
 canvas.addEventListener('touchmove',  e => e.preventDefault(), { passive: false });
 
 // --- Recognition ---
 
-async function sendForRecognition() {
-  if (strokes.length === 0) return;
+function runRecognition() {
+  if (strokes.length === 0 || !db) return;
   statusEl.textContent = 'Recognizing…';
   candidatesEl.innerHTML = '';
 
-  try {
-    const res = await fetch('/recognize', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ strokes: strokes.map(pts => ({ points: pts })) }),
-    });
-    const candidates = await res.json();
-    displayCandidates(candidates);
-    statusEl.textContent = `${candidates.length} candidates`;
-  } catch (err) {
-    statusEl.textContent = 'Error — is the server running?';
-  }
+  const candidates = recognize(strokes, db, 12);
+  displayCandidates(candidates);
+  statusEl.textContent = `${candidates.length} candidates`;
 }
 
 function displayCandidates(candidates) {
   candidatesEl.innerHTML = '';
-  candidates.forEach((c, i) => {
+  candidates.forEach(c => {
     const el = document.createElement('div');
     el.className = 'candidate';
     el.innerHTML = `
       <span class="candidate-char">${c.char}</span>
       <span class="candidate-score">${c.score.toFixed(1)}</span>
     `;
-    el.addEventListener('click', () => confirm(c.char, el));
+    el.addEventListener('click', () => confirmChar(c.char, el));
     candidatesEl.appendChild(el);
   });
 }
 
-function confirm(char, el) {
+function confirmChar(char, el) {
   document.querySelectorAll('.candidate').forEach(c => c.classList.remove('selected'));
   el.classList.add('selected');
   confirmedEl.textContent += char;
-  // Clear canvas for next character
-  setTimeout(() => {
-    clearCanvas();
-  }, 300);
+  setTimeout(clearCanvas, 300);
 }
 
 // --- Clear ---
