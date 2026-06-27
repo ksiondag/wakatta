@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+
+# Data (large, re-downloadable)
+data/
+models/
+
+# Generated debug images
+page_sample.png
+page_regions.png
+*_regions.png
+
+# Vendor (cloned separately)
+vendor/
