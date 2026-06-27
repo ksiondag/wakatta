@@ -123,15 +123,73 @@ def _dtw(a: np.ndarray, b: np.ndarray) -> float:
 # Database
 # ---------------------------------------------------------------------------
 
-def load_database(
-    data_dir: Path = DATA_DIR,
-    subset: str | None = DEV_SUBSET,
-) -> KanjiVGDatabase:
-    """
-    Parse KanjiVG SVG files and return a KanjiVGDatabase.
-    subset: string of characters to load; None loads everything (~11k files, slow).
-    """
+CACHE_PATH = Path("data/kanjivg_cache.npz")
+
+
+def _load_cache(cache_path: Path) -> KanjiVGDatabase | None:
+    if not cache_path.exists():
+        return None
+    print(f"Loading KanjiVG from cache {cache_path} ...")
+    raw = np.load(cache_path, allow_pickle=False)
     db = KanjiVGDatabase()
+    # Stored as flat arrays: chars (U codepoints), stroke_counts, and stacked stroke data
+    chars = [chr(cp) for cp in raw["codepoints"]]
+    offsets = raw["offsets"]      # (N+1,) start index into strokes array per character
+    stroke_ns = raw["stroke_ns"]  # (total_strokes,) number of points skipped — unused, kept for format
+    all_strokes = raw["strokes"]  # (total_points, 2)
+    stroke_offsets = raw["stroke_offsets"]  # (total_strokes+1,) point offsets per stroke
+
+    s_idx = 0  # index into stroke_offsets
+    for i, char in enumerate(chars):
+        n_strokes = int(offsets[i + 1] - offsets[i])
+        char_strokes = []
+        for _ in range(n_strokes):
+            p0 = int(stroke_offsets[s_idx])
+            p1 = int(stroke_offsets[s_idx + 1])
+            char_strokes.append(all_strokes[p0:p1])
+            s_idx += 1
+        db.add(char, char_strokes)
+    print(f"Loaded {len(db.chars)} characters from cache.")
+    return db
+
+
+def _save_cache(db: KanjiVGDatabase, cache_path: Path) -> None:
+    print(f"Saving cache to {cache_path} ...")
+    codepoints = np.array([ord(c) for c in db.chars], dtype=np.int32)
+
+    # Build flat stroke storage
+    char_list = list(db.chars.keys())
+    offsets = np.zeros(len(char_list) + 1, dtype=np.int32)
+    stroke_list: list[np.ndarray] = []
+    for i, char in enumerate(char_list):
+        strokes = db.chars[char]
+        offsets[i + 1] = offsets[i] + len(strokes)
+        stroke_list.extend(strokes)
+
+    stroke_offsets = np.zeros(len(stroke_list) + 1, dtype=np.int32)
+    for i, s in enumerate(stroke_list):
+        stroke_offsets[i + 1] = stroke_offsets[i] + len(s)
+
+    all_strokes = np.concatenate(stroke_list, axis=0) if stroke_list else np.zeros((0, 2), dtype=np.float32)
+    stroke_ns = np.array([len(s) for s in stroke_list], dtype=np.int32)
+
+    np.savez_compressed(
+        cache_path,
+        codepoints=codepoints,
+        offsets=offsets,
+        stroke_ns=stroke_ns,
+        stroke_offsets=stroke_offsets,
+        strokes=all_strokes,
+    )
+    print("Cache saved.")
+
+
+SVG_CACHE_DIR = Path("data/kanjivg_parsed")
+
+
+def _parse_svgs(data_dir: Path, subset: str | None) -> KanjiVGDatabase:
+    db = KanjiVGDatabase()
+    SVG_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     if subset is not None:
         wanted = {ord(c) for c in subset}
@@ -145,19 +203,33 @@ def load_database(
         print(f"Loading KanjiVG subset ({len(files)}/{len(wanted)} chars found)...")
     else:
         files = [f for f in sorted(data_dir.glob("*.svg")) if "-" not in f.stem]
-        print(f"Loading full KanjiVG ({len(files)} files)...")
+        cached = len(list(SVG_CACHE_DIR.glob("*.npy")))
+        print(f"Loading full KanjiVG ({len(files)} files, {cached} already cached)...")
 
     errors: list[str] = []
-    for svg_file in files:
+    total = len(files)
+    for i, svg_file in enumerate(files):
+        if i % 5 == 0 and i > 0:
+            print(f"  {i}/{total}")
         try:
             codepoint = int(svg_file.stem, 16)
             char = chr(codepoint)
         except ValueError:
             continue
+
+        npy_path = SVG_CACHE_DIR / f"{svg_file.stem}.npy"
+
         try:
-            strokes = _parse_svg_strokes(svg_file.read_text(encoding="utf-8"))
+            if npy_path.exists():
+                stacked = np.load(npy_path)  # (n_strokes, SAMPLES_PER_STROKE, 2)
+                strokes = [stacked[j] for j in range(len(stacked))]
+            else:
+                strokes = _parse_svg_strokes(svg_file.read_text(encoding="utf-8"))
+                if strokes:
+                    strokes = _normalize(strokes)
+                    np.save(npy_path, np.stack(strokes))
             if strokes:
-                db.add(char, _normalize(strokes))
+                db.add(char, strokes)
             else:
                 errors.append(f"  [empty] {svg_file.name} ({char!r})")
         except Exception as e:
@@ -171,6 +243,28 @@ def load_database(
             print(f"  ... and {len(errors) - 20} more")
 
     print(f"Loaded {len(db.chars)} characters.")
+    return db
+
+
+def load_database(
+    data_dir: Path = DATA_DIR,
+    subset: str | None = DEV_SUBSET,
+    cache_path: Path = CACHE_PATH,
+) -> KanjiVGDatabase:
+    """
+    Load KanjiVG stroke data. Uses a .npz cache for full loads to avoid
+    re-parsing SVGs on every restart. Cache is ignored when subset is set.
+    """
+    if subset is None:
+        db = _load_cache(cache_path)
+        if db is not None:
+            return db
+
+    db = _parse_svgs(data_dir, subset)
+
+    if subset is None:
+        _save_cache(db, cache_path)
+
     return db
 
 

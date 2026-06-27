@@ -1,5 +1,6 @@
 """Handwriting recognition server."""
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -15,7 +16,7 @@ db: kanjivg_db.KanjiVGDatabase = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global db
-    db = kanjivg_db.load_database()
+    db = await asyncio.to_thread(kanjivg_db.load_database)
     yield
 
 
