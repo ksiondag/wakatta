@@ -142,3 +142,12 @@ Work
       text regions on a manga page and transcribing text if OCR fails (pen input
       serves double duty as study and correction)
 - [ ] **Pitch accent** — add OJAD or accent dictionary lookup to word analysis
+
+### QoL — Handwriting
+- [ ] **Multi-character word input** — user should be able to write a whole word without
+      confirming each character individually. Approach: after recognizing top character
+      candidates, look them up as prefixes in a word dictionary (e.g. a frequency-ranked
+      kanji-compound list bundled as a second JSON); surface word suggestions alongside
+      single-character candidates. As the user writes more characters, intersect with words
+      that match the growing prefix. Tapping a word suggestion confirms all characters at
+      once and clears the canvas.
