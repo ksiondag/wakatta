@@ -34,7 +34,16 @@ Primary machine: 4090 GPU, Arch Linux. Also runs on Framework 12 (CPU-only, slow
 - Each region → `manga-ocr` → Japanese string
 - String → `fugashi` → tokenized words with readings and POS
 
-### Handwriting Recognition Webapp (`server.py` + `static/`)
+### Page Reader (`server.py` + `static/page-reader.html`)
+- Enter a PDF path + page number; server runs the full pipeline and persists results
+- Page image displayed with SVG bounding box overlay (green = vertical regions, orange = horizontal)
+- Click any region to select it; right panel shows the auto-OCR text as reference
+- Draw characters on the handwriting canvas → candidates appear → click to confirm
+- Confirmed characters append to the region's transcript and auto-save to SQLite
+- SQLite database (`data/wakatta.db`) stores Work → Page → Sentence hierarchy
+- Page images cached in `data/pages/`; re-processing the same page returns stored data
+
+### Handwriting Recognition Webapp (`server.py` + `static/index.html`)
 - FastAPI server loads KanjiVG stroke database on startup, generates `static/db.json`
 - HTML5 Canvas captures stylus/pointer strokes
 - Recognition runs **client-side** in `recognizer.js` (JS port of DTW pipeline) — no server needed after first load
@@ -80,12 +89,12 @@ For fully offline use after initial setup: set `HF_HUB_OFFLINE=1`.
 
 ---
 
-## Data Model (planned)
+## Data Model
 
 ```
-Work
-  └── Page (one image/PDF page)
-        └── Sentence (text region / speech bubble)
+Work                              ← implemented
+  └── Page (one image/PDF page)  ← implemented
+        └── Sentence (text region / speech bubble)  ← implemented
               └── WordOccurrence (token position on page)
                     └── Word (canonical entry, deduplicated by dictionary form)
                           ├── reading (hiragana pronunciation)
@@ -122,9 +131,9 @@ Work
 ## Next Steps
 
 ### Pipeline
-- [ ] **SQLite data model** — implement Work/Page/Sentence/Word schema with SQLAlchemy
-- [ ] **Ingestion endpoint** — FastAPI route that accepts a PDF, runs the OCR pipeline,
-      persists results to the database
+- [x] **SQLite data model** — Work/Page/Sentence schema with SQLAlchemy
+- [x] **Ingestion endpoint** — `POST /api/process` runs CTD + OCR and persists to the database
+- [ ] **Word layer** — run `fugashi` tokenization on confirmed `user_text`; populate Word/WordOccurrence tables
 - [ ] **Study deck** — connect ingested words to FSRS review cards
 
 ### Kanji
@@ -138,9 +147,9 @@ Work
       for easy portability between machines
 
 ### Quality
-- [ ] **Bounding box correction UI** — web interface for manually adjusting detected
-      text regions on a manga page and transcribing text if OCR fails (pen input
-      serves double duty as study and correction)
+- [x] **Page transcription UI** — page reader with SVG bbox overlay; click a region to
+      transcribe its text via handwriting input when OCR fails or is wrong
+- [ ] **Bounding box editing** — add, move, and resize detected regions directly on the page image
 - [ ] **Pitch accent** — add OJAD or accent dictionary lookup to word analysis
 
 ### QoL — Handwriting

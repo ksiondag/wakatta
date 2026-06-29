@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wakatta — Page Reader</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: sans-serif;
+  font-size: 14px;
+}
+
+.layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* ── Navbar ── */
+.navbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  background: #12122a;
+  border-bottom: 1px solid #333;
+}
+.navbar a {
+  color: #888;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+.navbar a:hover { color: #bbb; }
+.navbar .current {
+  color: #aaa;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.navbar-sep { color: #444; }
+
+/* ── Setup bar ── */
+.setup-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: #16162e;
+  border-bottom: 1px solid #2a2a44;
+  flex-wrap: wrap;
+}
+
+.setup-bar label {
+  color: #888;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+#pdf-path {
+  flex: 1;
+  min-width: 200px;
+  padding: 6px 10px;
+  background: #0d0d1a;
+  border: 1px solid #444;
+  border-radius: 5px;
+  color: #ddd;
+  font-size: 0.9rem;
+}
+
+#page-num {
+  width: 60px;
+  padding: 6px 8px;
+  background: #0d0d1a;
+  border: 1px solid #444;
+  border-radius: 5px;
+  color: #ddd;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+button {
+  padding: 6px 16px;
+  border: 1px solid #555;
+  border-radius: 5px;
+  background: #2a2a3e;
+  color: #ddd;
+  cursor: pointer;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+button:hover { background: #3a3a5e; }
+button:disabled { opacity: 0.4; cursor: default; }
+
+#process-status {
+  font-size: 0.82rem;
+  color: #888;
+  white-space: nowrap;
+}
+
+/* ── Main split ── */
+.main {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ── Image panel ── */
+.image-panel {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+#image-container {
+  position: relative;
+  display: inline-block;
+  line-height: 0; /* prevents gap under img */
+}
+
+#page-img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#bbox-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+
+#bbox-svg rect {
+  transition: fill 0.1s, stroke-width 0.1s;
+}
+
+/* ── Handwriting panel ── */
+.hw-panel {
+  width: 360px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid #2a2a44;
+  background: #161628;
+  overflow-y: auto;
+}
+
+.region-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  border-bottom: 1px solid #2a2a44;
+  background: #12122a;
+}
+
+#region-counter {
+  font-size: 0.85rem;
+  color: #888;
+}
+
+.region-nav button {
+  padding: 4px 10px;
+  font-size: 0.8rem;
+}
+
+.region-info {
+  padding: 12px 14px;
+  border-bottom: 1px solid #2a2a44;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.region-info .label {
+  font-size: 0.75rem;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+#ocr-text {
+  font-size: 1.1rem;
+  color: #777;
+  min-height: 1.4em;
+  letter-spacing: 0.08em;
+  word-break: break-all;
+}
+
+.user-text-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+#user-text {
+  flex: 1;
+  padding: 6px 8px;
+  background: #0d0d1a;
+  border: 1px solid #555;
+  border-radius: 5px;
+  color: #e8e8ff;
+  font-size: 1.2rem;
+  letter-spacing: 0.1em;
+}
+#user-text:focus { outline: none; border-color: #7070cc; }
+
+#undo-char {
+  padding: 6px 10px;
+  font-size: 1rem;
+}
+
+.save-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#save-status {
+  font-size: 0.78rem;
+  color: #666;
+}
+
+/* ── Canvas section ── */
+.canvas-section {
+  padding: 14px;
+  border-bottom: 1px solid #2a2a44;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+#canvas-wrap {
+  border: 2px solid #333;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+#hw-canvas {
+  display: block;
+  background: #0d0d1a;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.hw-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+}
+
+#hw-status {
+  font-size: 0.8rem;
+  color: #888;
+  flex: 1;
+}
+
+#stroke-count {
+  font-size: 0.8rem;
+  color: #aaa;
+}
+
+/* ── Candidates ── */
+#candidates {
+  padding: 10px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.candidate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid #444;
+  border-radius: 6px;
+  background: #2a2a3e;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+  min-width: 50px;
+}
+.candidate:hover { background: #3e3e60; border-color: #7070cc; }
+.candidate.selected { background: #3a3a7a; border-color: #8888ff; }
+
+.candidate-char { font-size: 2rem; line-height: 1; }
+.candidate-score { font-size: 0.6rem; color: #666; }
+
+/* ── Empty state ── */
+#empty-state {
+  padding: 24px 14px;
+  color: #555;
+  text-align: center;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+/* ── Responsive: stack on narrow ── */
+@media (max-width: 700px) {
+  .main { flex-direction: column; }
+  .hw-panel { width: 100%; border-left: none; border-top: 1px solid #2a2a44; }
+  #hw-canvas { width: 100% !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="layout">
+
+  <nav class="navbar">
+    <a href="/">Handwriting</a>
+    <span class="navbar-sep">·</span>
+    <span class="current">Page Reader</span>
+  </nav>
+
+  <div class="setup-bar">
+    <label for="pdf-path">PDF</label>
+    <input id="pdf-path" type="text" placeholder="/path/to/manga.pdf" spellcheck="false">
+    <label for="page-num">Page</label>
+    <input id="page-num" type="number" min="0" value="2">
+    <button id="process-btn">Process</button>
+    <span id="process-status">Enter a PDF path and page number</span>
+  </div>
+
+  <div class="main" id="main">
+
+    <div class="image-panel" id="image-panel">
+      <div id="image-container">
+        <img id="page-img" alt="manga page">
+        <svg id="bbox-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+      </div>
+    </div>
+
+    <div class="hw-panel">
+
+      <div class="region-nav" id="region-nav" style="display:none">
+        <button id="prev-region">◀</button>
+        <span id="region-counter">—</span>
+        <button id="next-region">▶</button>
+      </div>
+
+      <div class="region-info" id="region-info" style="display:none">
+        <div class="label">OCR (auto-detected)</div>
+        <div id="ocr-text">—</div>
+        <div class="label">Your text</div>
+        <div class="user-text-row">
+          <input id="user-text" type="text" placeholder="Confirm characters below…">
+          <button id="undo-char" title="Remove last character">⌫</button>
+        </div>
+        <div class="save-row">
+          <button id="save-btn">Save</button>
+          <span id="save-status"></span>
+        </div>
+      </div>
+
+      <div class="canvas-section">
+        <div id="canvas-wrap">
+          <canvas id="hw-canvas" width="320" height="320"></canvas>
+        </div>
+        <div class="hw-controls">
+          <button id="clear-btn">Clear</button>
+          <span id="stroke-count">0 strokes</span>
+          <span id="hw-status">Select a region</span>
+        </div>
+      </div>
+
+      <div id="candidates"></div>
+
+      <div id="empty-state">
+        ← Process a page, then click a<br>bounding box to start entering text
+      </div>
+
+    </div>
+
+  </div>
+
+</div>
+
+<script type="module">
+import { loadDb, recognize } from '/static/recognizer.js';
+
+// ── State ──────────────────────────────────────────────────────────────────────
+
+let db = null;
+let pageData = null;        // full API response
+let sentences = [];         // pageData.sentences
+let activeIdx = null;       // index into sentences[]
+
+// ── Element refs ───────────────────────────────────────────────────────────────
+
+const pdfPathEl    = document.getElementById('pdf-path');
+const pageNumEl    = document.getElementById('page-num');
+const processBtnEl = document.getElementById('process-btn');
+const processStatEl= document.getElementById('process-status');
+
+const pageImgEl    = document.getElementById('page-img');
+const bboxSvgEl    = document.getElementById('bbox-svg');
+
+const regionNavEl  = document.getElementById('region-nav');
+const regionCtrEl  = document.getElementById('region-counter');
+const prevBtnEl    = document.getElementById('prev-region');
+const nextBtnEl    = document.getElementById('next-region');
+
+const regionInfoEl = document.getElementById('region-info');
+const ocrTextEl    = document.getElementById('ocr-text');
+const userTextEl   = document.getElementById('user-text');
+const undoBtnEl    = document.getElementById('undo-char');
+const saveBtnEl    = document.getElementById('save-btn');
+const saveStatEl   = document.getElementById('save-status');
+
+const hwCanvasEl   = document.getElementById('hw-canvas');
+const hwCtx        = hwCanvasEl.getContext('2d');
+const candidatesEl = document.getElementById('candidates');
+const clearBtnEl   = document.getElementById('clear-btn');
+const strokeCntEl  = document.getElementById('stroke-count');
+const hwStatEl     = document.getElementById('hw-status');
+const emptyStateEl = document.getElementById('empty-state');
+
+// ── Load KanjiVG db ────────────────────────────────────────────────────────────
+
+try {
+  db = await loadDb('/static/db.json');
+} catch (err) {
+  hwStatEl.textContent = 'DB load failed';
+  console.error(err);
+}
+
+hwCtx.strokeStyle = '#e8e8ff';
+hwCtx.lineWidth = 3;
+hwCtx.lineCap = 'round';
+hwCtx.lineJoin = 'round';
+
+// ── Process page ───────────────────────────────────────────────────────────────
+
+processBtnEl.addEventListener('click', async () => {
+  const pdfPath = pdfPathEl.value.trim();
+  const pageNum = parseInt(pageNumEl.value, 10);
+  if (!pdfPath) { processStatEl.textContent = 'Enter a PDF path'; return; }
+
+  processBtnEl.disabled = true;
+  processStatEl.textContent = 'Processing… (CTD + OCR, may take 30s+)';
+
+  try {
+    const res = await fetch('/api/process', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pdf_path: pdfPath, page_num: pageNum }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      processStatEl.textContent = `Error: ${err.detail ?? res.status}`;
+      return;
+    }
+    pageData = await res.json();
+    sentences = pageData.sentences;
+    processStatEl.textContent = `${sentences.length} regions detected`;
+    renderPage();
+  } catch (err) {
+    processStatEl.textContent = `Error: ${err.message}`;
+    console.error(err);
+  } finally {
+    processBtnEl.disabled = false;
+  }
+});
+
+// ── Render page image + bbox overlay ──────────────────────────────────────────
+
+function renderPage() {
+  // Image
+  pageImgEl.src = `/api/pages/${pageData.id}/image`;
+
+  // SVG viewBox matches natural image dimensions
+  bboxSvgEl.setAttribute('viewBox', `0 0 ${pageData.width} ${pageData.height}`);
+  bboxSvgEl.innerHTML = '';
+
+  sentences.forEach((s, i) => {
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', s.x1);
+    rect.setAttribute('y', s.y1);
+    rect.setAttribute('width', s.x2 - s.x1);
+    rect.setAttribute('height', s.y2 - s.y1);
+    rect.setAttribute('rx', '2');
+    rect.setAttribute('fill', s.user_text ? 'rgba(80,160,80,0.12)' : 'rgba(0,0,0,0.01)');
+    rect.setAttribute('stroke', s.direction === 'v' ? '#00c864' : '#c87800');
+    rect.setAttribute('stroke-width', '3');
+    rect.dataset.idx = i;
+    rect.addEventListener('click', () => selectRegion(i));
+    bboxSvgEl.appendChild(rect);
+
+    // Small index label
+    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    text.setAttribute('x', s.x1 + 3);
+    text.setAttribute('y', s.y1 - 4);
+    text.setAttribute('font-size', '18');
+    text.setAttribute('fill', s.direction === 'v' ? '#00c864' : '#c87800');
+    text.setAttribute('font-family', 'sans-serif');
+    text.setAttribute('pointer-events', 'none');
+    text.textContent = i + 1;
+    bboxSvgEl.appendChild(text);
+  });
+
+  regionNavEl.style.display = 'flex';
+  emptyStateEl.style.display = 'none';
+
+  // Select first region by default
+  if (sentences.length > 0) selectRegion(0);
+}
+
+// ── Region selection ───────────────────────────────────────────────────────────
+
+function selectRegion(idx) {
+  activeIdx = idx;
+  const s = sentences[idx];
+
+  // Update nav counter
+  regionCtrEl.textContent = `${idx + 1} / ${sentences.length}`;
+
+  // Highlight active rect, dim others
+  bboxSvgEl.querySelectorAll('rect').forEach(r => {
+    const ri = parseInt(r.dataset.idx, 10);
+    if (ri === idx) {
+      r.setAttribute('fill', 'rgba(100,100,255,0.18)');
+      r.setAttribute('stroke', '#8888ff');
+      r.setAttribute('stroke-width', '5');
+    } else {
+      const si = sentences[ri];
+      r.setAttribute('fill', si.user_text ? 'rgba(80,160,80,0.12)' : 'rgba(0,0,0,0.01)');
+      r.setAttribute('stroke', si.direction === 'v' ? '#00c864' : '#c87800');
+      r.setAttribute('stroke-width', '3');
+    }
+  });
+
+  // Update info panel
+  regionInfoEl.style.display = 'flex';
+  ocrTextEl.textContent = s.ocr_text ?? '—';
+  userTextEl.value = s.user_text ?? '';
+  saveStatEl.textContent = '';
+
+  // Clear canvas
+  clearCanvas();
+  hwStatEl.textContent = 'Draw a character';
+}
+
+prevBtnEl.addEventListener('click', () => {
+  if (activeIdx === null || activeIdx === 0) return;
+  selectRegion(activeIdx - 1);
+});
+
+nextBtnEl.addEventListener('click', () => {
+  if (activeIdx === null || activeIdx >= sentences.length - 1) return;
+  selectRegion(activeIdx + 1);
+});
+
+// ── Save region text ───────────────────────────────────────────────────────────
+
+async function saveRegion() {
+  if (activeIdx === null) return;
+  const s = sentences[activeIdx];
+  const text = userTextEl.value;
+
+  try {
+    const res = await fetch(`/api/sentences/${s.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_text: text }),
+    });
+    if (!res.ok) { saveStatEl.textContent = 'Save failed'; return; }
+    const updated = await res.json();
+    sentences[activeIdx].user_text = updated.user_text;
+    saveStatEl.textContent = 'Saved ✓';
+    // Refresh the rect fill to show it's been transcribed
+    const rect = bboxSvgEl.querySelector(`rect[data-idx="${activeIdx}"]`);
+    if (rect && text) rect.setAttribute('fill', 'rgba(80,160,80,0.12)');
+    setTimeout(() => { saveStatEl.textContent = ''; }, 2000);
+  } catch (err) {
+    saveStatEl.textContent = 'Save failed';
+    console.error(err);
+  }
+}
+
+saveBtnEl.addEventListener('click', saveRegion);
+
+// Auto-save on input change (debounced)
+let saveTimer = null;
+userTextEl.addEventListener('input', () => {
+  clearTimeout(saveTimer);
+  saveStatEl.textContent = '';
+  saveTimer = setTimeout(saveRegion, 1200);
+});
+
+undoBtnEl.addEventListener('click', () => {
+  if (!userTextEl.value.length) return;
+  userTextEl.value = userTextEl.value.slice(0, -1);
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveRegion, 800);
+});
+
+// ── Handwriting ────────────────────────────────────────────────────────────────
+
+let strokes = [];
+let currentStroke = [];
+let drawing = false;
+let recognizeTimer = null;
+
+function getPos(e) {
+  const rect = hwCanvasEl.getBoundingClientRect();
+  const scaleX = hwCanvasEl.width / rect.width;
+  const scaleY = hwCanvasEl.height / rect.height;
+  const src = e.touches ? e.touches[0] : e;
+  return {
+    x: (src.clientX - rect.left) * scaleX,
+    y: (src.clientY - rect.top) * scaleY,
+  };
+}
+
+hwCanvasEl.addEventListener('pointerdown', e => {
+  if (activeIdx === null) return;
+  e.preventDefault();
+  drawing = true;
+  currentStroke = [];
+  const pt = getPos(e);
+  currentStroke.push(pt);
+  hwCtx.beginPath();
+  hwCtx.moveTo(pt.x, pt.y);
+  clearTimeout(recognizeTimer);
+  hwStatEl.textContent = 'Drawing…';
+});
+
+hwCanvasEl.addEventListener('pointermove', e => {
+  if (!drawing) return;
+  e.preventDefault();
+  const pt = getPos(e);
+  currentStroke.push(pt);
+  hwCtx.lineTo(pt.x, pt.y);
+  hwCtx.stroke();
+  hwCtx.beginPath();
+  hwCtx.moveTo(pt.x, pt.y);
+});
+
+hwCanvasEl.addEventListener('pointerup', e => {
+  if (!drawing) return;
+  drawing = false;
+  if (currentStroke.length >= 2) {
+    strokes.push(currentStroke);
+    strokeCntEl.textContent = `${strokes.length} stroke${strokes.length !== 1 ? 's' : ''}`;
+  }
+  currentStroke = [];
+  clearTimeout(recognizeTimer);
+  recognizeTimer = setTimeout(runRecognition, 700);
+});
+
+hwCanvasEl.addEventListener('pointerleave', e => {
+  if (drawing) hwCanvasEl.dispatchEvent(new PointerEvent('pointerup', e));
+});
+
+hwCanvasEl.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+hwCanvasEl.addEventListener('touchmove',  e => e.preventDefault(), { passive: false });
+
+function runRecognition() {
+  if (strokes.length === 0 || !db) return;
+  hwStatEl.textContent = 'Recognizing…';
+  const candidates = recognize(strokes, db, 12);
+  displayCandidates(candidates);
+  hwStatEl.textContent = `${candidates.length} candidates`;
+}
+
+function displayCandidates(candidates) {
+  candidatesEl.innerHTML = '';
+  candidates.forEach(c => {
+    const el = document.createElement('div');
+    el.className = 'candidate';
+    el.innerHTML = `
+      <span class="candidate-char">${c.char}</span>
+      <span class="candidate-score">${c.score.toFixed(1)}</span>
+    `;
+    el.addEventListener('click', () => confirmChar(c.char, el));
+    candidatesEl.appendChild(el);
+  });
+}
+
+function confirmChar(char, el) {
+  document.querySelectorAll('.candidate').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  userTextEl.value += char;
+  // Auto-save after each confirmed character
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveRegion, 600);
+  setTimeout(clearCanvas, 250);
+}
+
+clearBtnEl.addEventListener('click', clearCanvas);
+
+function clearCanvas() {
+  hwCtx.clearRect(0, 0, hwCanvasEl.width, hwCanvasEl.height);
+  strokes = [];
+  currentStroke = [];
+  clearTimeout(recognizeTimer);
+  candidatesEl.innerHTML = '';
+  hwStatEl.textContent = activeIdx !== null ? 'Draw a character' : 'Select a region';
+  strokeCntEl.textContent = '0 strokes';
+}
+</script>
+</body>
+</html>
