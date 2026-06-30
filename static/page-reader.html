@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Wakatta — Page Reader</title>
+<title>Wakatta — Library</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -143,152 +143,6 @@ input:focus { outline: none; border-color: #7070cc; }
   border-radius: 2px;
   transition: width 0.4s ease;
 }
-
-
-/* ══════════════════════════════════════════
-   READER VIEW
-══════════════════════════════════════════ */
-
-#reader-view {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.reader-header {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 8px 14px;
-  background: #12122a;
-  border-bottom: 1px solid #2a2a44;
-}
-
-#back-btn { padding: 5px 12px; font-size: 0.85rem; }
-#reader-work-title { flex: 1; font-size: 0.95rem; color: #aaa; }
-
-.page-nav {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.page-nav button { padding: 4px 12px; font-size: 0.9rem; }
-#page-counter { font-size: 0.85rem; color: #888; min-width: 80px; text-align: center; }
-
-.reader-main {
-  flex: 1;
-  display: flex;
-  overflow: hidden;
-}
-
-/* ── Image panel ── */
-.image-panel {
-  flex: 1;
-  overflow: auto;
-  padding: 16px;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-}
-
-#image-container {
-  position: relative;
-  display: inline-block;
-  line-height: 0;
-}
-
-#page-img { display: block; max-width: 100%; height: auto; }
-
-#bbox-svg {
-  position: absolute;
-  top: 0; left: 0;
-  width: 100%; height: 100%;
-  cursor: pointer;
-}
-#bbox-svg rect { transition: fill 0.1s, stroke-width 0.1s; }
-
-/* ── Handwriting panel ── */
-.hw-panel {
-  width: 360px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  border-left: 1px solid #2a2a44;
-  background: #161628;
-  overflow-y: auto;
-}
-
-.region-nav {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 14px;
-  border-bottom: 1px solid #2a2a44;
-  background: #12122a;
-}
-#region-counter { font-size: 0.85rem; color: #888; }
-.region-nav button { padding: 4px 10px; font-size: 0.8rem; }
-
-.region-info {
-  padding: 12px 14px;
-  border-bottom: 1px solid #2a2a44;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.region-info .label {
-  font-size: 0.75rem; color: #666;
-  text-transform: uppercase; letter-spacing: 0.05em;
-}
-#ocr-text { font-size: 1.1rem; color: #777; min-height: 1.4em; letter-spacing: 0.08em; word-break: break-all; }
-
-.user-text-row { display: flex; gap: 6px; align-items: center; }
-#user-text {
-  flex: 1; padding: 6px 8px;
-  background: #0d0d1a; border: 1px solid #555; border-radius: 5px;
-  color: #e8e8ff; font-size: 1.2rem; letter-spacing: 0.1em;
-}
-#user-text:focus { outline: none; border-color: #7070cc; }
-#undo-char { padding: 6px 10px; font-size: 1rem; }
-
-.save-row { display: flex; align-items: center; gap: 8px; }
-#save-status { font-size: 0.78rem; color: #666; }
-
-.canvas-section {
-  padding: 14px;
-  border-bottom: 1px solid #2a2a44;
-  display: flex; flex-direction: column; align-items: center; gap: 8px;
-}
-#canvas-wrap { border: 2px solid #333; border-radius: 6px; overflow: hidden; }
-#hw-canvas {
-  display: block; background: #0d0d1a;
-  cursor: crosshair; touch-action: none;
-}
-.hw-controls { display: flex; gap: 10px; align-items: center; width: 100%; }
-#hw-status   { font-size: 0.8rem; color: #888; flex: 1; }
-#stroke-count{ font-size: 0.8rem; color: #aaa; }
-
-#candidates { padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 8px; }
-
-.candidate {
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
-  padding: 8px 10px; border: 1px solid #444; border-radius: 6px;
-  background: #2a2a3e; cursor: pointer; min-width: 50px;
-  transition: background 0.1s, border-color 0.1s;
-}
-.candidate:hover { background: #3e3e60; border-color: #7070cc; }
-.candidate.selected { background: #3a3a7a; border-color: #8888ff; }
-.candidate-char  { font-size: 2rem; line-height: 1; }
-.candidate-score { font-size: 0.6rem; color: #666; }
-
-#hw-empty { padding: 24px 14px; color: #555; text-align: center; font-size: 0.9rem; line-height: 1.6; }
-
-@media (max-width: 700px) {
-  .reader-main { flex-direction: column; }
-  .hw-panel { width: 100%; border-left: none; border-top: 1px solid #2a2a44; }
-}
 </style>
 </head>
 <body>
@@ -297,10 +151,9 @@ input:focus { outline: none; border-color: #7070cc; }
   <nav class="navbar">
     <a href="/">Handwriting</a>
     <span class="navbar-sep">·</span>
-    <span class="current">Page Reader</span>
+    <span class="current">Library</span>
   </nav>
 
-  <!-- ── Library view ── -->
   <div id="library-view">
     <div class="add-work-bar">
       <input id="pdf-file" type="file" accept=".pdf" style="display:none">
@@ -313,82 +166,8 @@ input:focus { outline: none; border-color: #7070cc; }
     </div>
   </div>
 
-  <!-- ── Reader view (hidden until a work is opened) ── -->
-  <div id="reader-view" hidden>
-
-    <div class="reader-header">
-      <button id="back-btn">← Library</button>
-      <span id="reader-work-title"></span>
-      <div class="page-nav">
-        <button id="prev-page">◀</button>
-        <span id="page-counter">—</span>
-        <button id="next-page">▶</button>
-      </div>
-    </div>
-
-    <div class="reader-main">
-
-      <div class="image-panel">
-        <div id="image-container">
-          <img id="page-img" alt="manga page">
-          <svg id="bbox-svg" xmlns="http://www.w3.org/2000/svg"></svg>
-        </div>
-      </div>
-
-      <div class="hw-panel">
-
-        <div class="region-nav" id="region-nav">
-          <button id="prev-region">◀</button>
-          <span id="region-counter">—</span>
-          <button id="next-region">▶</button>
-        </div>
-
-        <div class="region-info" id="region-info" style="display:none">
-          <div class="label">OCR (auto-detected)</div>
-          <div id="ocr-text">—</div>
-          <div class="label">Your text</div>
-          <div class="user-text-row">
-            <input id="user-text" type="text" placeholder="Confirm characters below…">
-            <button id="undo-char" title="Remove last character">⌫</button>
-          </div>
-          <div class="save-row">
-            <button id="save-btn">Save</button>
-            <span id="save-status"></span>
-          </div>
-        </div>
-
-        <div class="canvas-section">
-          <div id="canvas-wrap">
-            <canvas id="hw-canvas" width="320" height="320"></canvas>
-          </div>
-          <div class="hw-controls">
-            <button id="clear-btn">Clear</button>
-            <span id="stroke-count">0 strokes</span>
-            <span id="hw-status">Select a region</span>
-          </div>
-        </div>
-
-        <div id="candidates"></div>
-        <div id="hw-empty">← Select a bounding box to start transcribing</div>
-
-      </div>
-    </div>
-  </div>
-
 </div>
 <script type="module">
-import { loadDb, recognize } from '/static/recognizer.js';
-
-// ── KanjiVG db ─────────────────────────────────────────────────────────────────
-
-let kwDb = null;
-try { kwDb = await loadDb('/static/db.json'); } catch (e) { console.error(e); }
-
-const hwCtx = document.getElementById('hw-canvas').getContext('2d');
-hwCtx.strokeStyle = '#e8e8ff';
-hwCtx.lineWidth = 3;
-hwCtx.lineCap = 'round';
-hwCtx.lineJoin = 'round';
 
 // ── State ──────────────────────────────────────────────────────────────────────
 
@@ -397,49 +176,14 @@ let workPages = {};          // { workId: [{id, page_num, width, height}] }
 let workJobs  = {};          // { workId: jobObj }
 let pollTimers= {};          // { workId: timerId }
 
-let currentWork  = null;
-let currentPages = [];
-let currentPageIdx = 0;
-let pageData     = null;     // full /api/pages/{id} response
-let sentences    = [];
-let activeIdx    = null;
-
 // ── Element refs ───────────────────────────────────────────────────────────────
 
-const libraryViewEl  = document.getElementById('library-view');
-const readerViewEl   = document.getElementById('reader-view');
 const pdfFileEl       = document.getElementById('pdf-file');
 const browseBtnEl     = document.getElementById('browse-btn');
 const selectedFilenameEl = document.getElementById('selected-filename');
 const addStatusEl     = document.getElementById('add-status');
 const worksListEl    = document.getElementById('works-list');
 const worksEmptyEl   = document.getElementById('works-empty');
-
-const backBtnEl      = document.getElementById('back-btn');
-const readerTitleEl  = document.getElementById('reader-work-title');
-const prevPageBtnEl  = document.getElementById('prev-page');
-const nextPageBtnEl  = document.getElementById('next-page');
-const pageCounterEl  = document.getElementById('page-counter');
-
-const pageImgEl      = document.getElementById('page-img');
-const bboxSvgEl      = document.getElementById('bbox-svg');
-
-const regionNavEl    = document.getElementById('region-nav');
-const regionCtrEl    = document.getElementById('region-counter');
-const prevRegBtnEl   = document.getElementById('prev-region');
-const nextRegBtnEl   = document.getElementById('next-region');
-const regionInfoEl   = document.getElementById('region-info');
-const ocrTextEl      = document.getElementById('ocr-text');
-const userTextEl     = document.getElementById('user-text');
-const undoBtnEl      = document.getElementById('undo-char');
-const saveBtnEl      = document.getElementById('save-btn');
-const saveStatEl     = document.getElementById('save-status');
-const hwCanvasEl     = document.getElementById('hw-canvas');
-const candidatesEl   = document.getElementById('candidates');
-const clearBtnEl     = document.getElementById('clear-btn');
-const strokeCntEl    = document.getElementById('stroke-count');
-const hwStatEl       = document.getElementById('hw-status');
-const hwEmptyEl      = document.getElementById('hw-empty');
 
 // ── Notification permission ────────────────────────────────────────────────────
 
@@ -551,7 +295,6 @@ function updateWorkCard(workId) {
   const card = worksListEl.querySelector(`.work-card[data-work-id="${workId}"]`);
   if (!card) return;
   const st = workStatus(workId);
-  const work = workList.find(w => w.id === workId);
 
   card.querySelector('.work-status').className = `work-status ${st.cls}`;
   card.querySelector('.work-status').textContent = st.label;
@@ -579,7 +322,7 @@ worksListEl.addEventListener('click', e => {
   const btn = e.target.closest('button[data-action]');
   if (!btn) return;
   const id = parseInt(btn.dataset.id, 10);
-  if (btn.dataset.action === 'read') openReader(id);
+  if (btn.dataset.action === 'read') location.href = `/read/${id}`;
   if (btn.dataset.action === 'process') startJob(id);
 });
 
@@ -668,225 +411,6 @@ async function pollJob(workId, jobId) {
   } catch (err) {
     console.error('Poll error', err);
   }
-}
-
-// ── Open / close reader ────────────────────────────────────────────────────────
-
-async function openReader(workId) {
-  await fetchPages(workId);
-  currentWork  = workList.find(w => w.id === workId);
-  currentPages = workPages[workId] ?? [];
-  if (!currentPages.length) return;
-
-  readerTitleEl.textContent = currentWork.title;
-  libraryViewEl.hidden = true;
-  readerViewEl.hidden  = false;
-
-  navigateTo(0);
-}
-
-backBtnEl.addEventListener('click', () => {
-  readerViewEl.hidden  = true;
-  libraryViewEl.hidden = false;
-  currentWork = null;
-  activeIdx   = null;
-});
-
-prevPageBtnEl.addEventListener('click', () => navigateTo(currentPageIdx - 1));
-nextPageBtnEl.addEventListener('click', () => navigateTo(currentPageIdx + 1));
-
-async function navigateTo(idx) {
-  if (!currentPages.length) return;
-  idx = Math.max(0, Math.min(idx, currentPages.length - 1));
-  currentPageIdx = idx;
-
-  prevPageBtnEl.disabled = idx === 0;
-  nextPageBtnEl.disabled = idx === currentPages.length - 1;
-  pageCounterEl.textContent = `Page ${idx + 1} / ${currentPages.length}`;
-
-  const pageRecord = currentPages[idx];
-  const res = await fetch(`/api/pages/${pageRecord.id}`);
-  pageData  = await res.json();
-  sentences = pageData.sentences;
-  activeIdx = null;
-
-  pageImgEl.src = `/api/pages/${pageRecord.id}/image`;
-  bboxSvgEl.setAttribute('viewBox', `0 0 ${pageData.width} ${pageData.height}`);
-  bboxSvgEl.innerHTML = '';
-
-  sentences.forEach((s, i) => {
-    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-    rect.setAttribute('x', s.x1);
-    rect.setAttribute('y', s.y1);
-    rect.setAttribute('width', s.x2 - s.x1);
-    rect.setAttribute('height', s.y2 - s.y1);
-    rect.setAttribute('rx', '2');
-    rect.setAttribute('fill', s.user_text ? 'rgba(80,160,80,0.12)' : 'rgba(0,0,0,0.01)');
-    rect.setAttribute('stroke', s.direction === 'v' ? '#00c864' : '#c87800');
-    rect.setAttribute('stroke-width', '3');
-    rect.dataset.idx = i;
-    rect.addEventListener('click', () => selectRegion(i));
-    bboxSvgEl.appendChild(rect);
-
-    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    label.setAttribute('x', s.x1 + 3);
-    label.setAttribute('y', s.y1 - 4);
-    label.setAttribute('font-size', '18');
-    label.setAttribute('fill', s.direction === 'v' ? '#00c864' : '#c87800');
-    label.setAttribute('font-family', 'sans-serif');
-    label.setAttribute('pointer-events', 'none');
-    label.textContent = i + 1;
-    bboxSvgEl.appendChild(label);
-  });
-
-  regionInfoEl.style.display = 'none';
-  hwEmptyEl.style.display = 'block';
-  clearCanvas();
-  hwStatEl.textContent = 'Select a region';
-}
-
-// ── Region selection ───────────────────────────────────────────────────────────
-
-function selectRegion(idx) {
-  activeIdx = idx;
-  const s = sentences[idx];
-
-  regionCtrEl.textContent = `${idx + 1} / ${sentences.length}`;
-
-  bboxSvgEl.querySelectorAll('rect').forEach(r => {
-    const ri = parseInt(r.dataset.idx, 10);
-    const si = sentences[ri];
-    if (ri === idx) {
-      r.setAttribute('fill', 'rgba(100,100,255,0.18)');
-      r.setAttribute('stroke', '#8888ff');
-      r.setAttribute('stroke-width', '5');
-    } else {
-      r.setAttribute('fill', si.user_text ? 'rgba(80,160,80,0.12)' : 'rgba(0,0,0,0.01)');
-      r.setAttribute('stroke', si.direction === 'v' ? '#00c864' : '#c87800');
-      r.setAttribute('stroke-width', '3');
-    }
-  });
-
-  regionInfoEl.style.display = 'flex';
-  hwEmptyEl.style.display = 'none';
-  ocrTextEl.textContent = s.ocr_text ?? '—';
-  userTextEl.value = s.user_text ?? '';
-  saveStatEl.textContent = '';
-  clearCanvas();
-  hwStatEl.textContent = 'Draw a character';
-}
-
-prevRegBtnEl.addEventListener('click', () => { if (activeIdx > 0) selectRegion(activeIdx - 1); });
-nextRegBtnEl.addEventListener('click', () => { if (activeIdx < sentences.length - 1) selectRegion(activeIdx + 1); });
-
-// ── Save region text ───────────────────────────────────────────────────────────
-
-let saveTimer = null;
-
-async function saveRegion() {
-  if (activeIdx === null) return;
-  const s = sentences[activeIdx];
-  try {
-    const res = await fetch(`/api/sentences/${s.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_text: userTextEl.value }),
-    });
-    if (!res.ok) { saveStatEl.textContent = 'Save failed'; return; }
-    const updated = await res.json();
-    sentences[activeIdx].user_text = updated.user_text;
-    saveStatEl.textContent = 'Saved ✓';
-    const rect = bboxSvgEl.querySelector(`rect[data-idx="${activeIdx}"]`);
-    if (rect && updated.user_text) rect.setAttribute('fill', 'rgba(80,160,80,0.12)');
-    setTimeout(() => { saveStatEl.textContent = ''; }, 2000);
-  } catch (err) {
-    saveStatEl.textContent = 'Save failed';
-  }
-}
-
-saveBtnEl.addEventListener('click', saveRegion);
-userTextEl.addEventListener('input', () => {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveRegion, 1200);
-});
-undoBtnEl.addEventListener('click', () => {
-  if (!userTextEl.value.length) return;
-  userTextEl.value = userTextEl.value.slice(0, -1);
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveRegion, 800);
-});
-
-// ── Handwriting ────────────────────────────────────────────────────────────────
-
-let strokes = [], currentStroke = [], drawing = false, recogTimer = null;
-
-function getPos(e) {
-  const r = hwCanvasEl.getBoundingClientRect();
-  const src = e.touches ? e.touches[0] : e;
-  return {
-    x: (src.clientX - r.left) * (hwCanvasEl.width / r.width),
-    y: (src.clientY - r.top)  * (hwCanvasEl.height / r.height),
-  };
-}
-
-hwCanvasEl.addEventListener('pointerdown', e => {
-  if (activeIdx === null) return;
-  e.preventDefault(); drawing = true; currentStroke = [];
-  const pt = getPos(e); currentStroke.push(pt);
-  hwCtx.beginPath(); hwCtx.moveTo(pt.x, pt.y);
-  clearTimeout(recogTimer); hwStatEl.textContent = 'Drawing…';
-});
-hwCanvasEl.addEventListener('pointermove', e => {
-  if (!drawing) return; e.preventDefault();
-  const pt = getPos(e); currentStroke.push(pt);
-  hwCtx.lineTo(pt.x, pt.y); hwCtx.stroke();
-  hwCtx.beginPath(); hwCtx.moveTo(pt.x, pt.y);
-});
-hwCanvasEl.addEventListener('pointerup', e => {
-  if (!drawing) return; drawing = false;
-  if (currentStroke.length >= 2) {
-    strokes.push(currentStroke);
-    strokeCntEl.textContent = `${strokes.length} stroke${strokes.length !== 1 ? 's' : ''}`;
-  }
-  currentStroke = [];
-  clearTimeout(recogTimer); recogTimer = setTimeout(runRecognition, 700);
-});
-hwCanvasEl.addEventListener('pointerleave', e => {
-  if (drawing) hwCanvasEl.dispatchEvent(new PointerEvent('pointerup', e));
-});
-hwCanvasEl.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
-hwCanvasEl.addEventListener('touchmove',  e => e.preventDefault(), { passive: false });
-
-function runRecognition() {
-  if (!strokes.length || !kwDb) return;
-  hwStatEl.textContent = 'Recognizing…';
-  const candidates = recognize(strokes, kwDb, 12);
-  candidatesEl.innerHTML = '';
-  candidates.forEach(c => {
-    const el = document.createElement('div');
-    el.className = 'candidate';
-    el.innerHTML = `<span class="candidate-char">${c.char}</span><span class="candidate-score">${c.score.toFixed(1)}</span>`;
-    el.addEventListener('click', () => confirmChar(c.char, el));
-    candidatesEl.appendChild(el);
-  });
-  hwStatEl.textContent = `${candidates.length} candidates`;
-}
-
-function confirmChar(char, el) {
-  document.querySelectorAll('.candidate').forEach(c => c.classList.remove('selected'));
-  el.classList.add('selected');
-  userTextEl.value += char;
-  clearTimeout(saveTimer); saveTimer = setTimeout(saveRegion, 600);
-  setTimeout(clearCanvas, 250);
-}
-
-clearBtnEl.addEventListener('click', clearCanvas);
-function clearCanvas() {
-  hwCtx.clearRect(0, 0, hwCanvasEl.width, hwCanvasEl.height);
-  strokes = []; currentStroke = [];
-  clearTimeout(recogTimer); candidatesEl.innerHTML = '';
-  hwStatEl.textContent = activeIdx !== null ? 'Draw a character' : 'Select a region';
-  strokeCntEl.textContent = '0 strokes';
 }
 
 // ── Util ───────────────────────────────────────────────────────────────────────

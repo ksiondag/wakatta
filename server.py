@@ -377,6 +377,11 @@ def page_reader():
     return FileResponse("static/page-reader.html")
 
 
+@app.get("/read/{work_id}")
+def read_work(work_id: int):
+    return FileResponse("static/reader.html")
+
+
 @app.post("/recognize")
 def recognize(req: RecognizeRequest):
     raw = [s.points for s in req.strokes]

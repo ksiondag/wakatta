@@ -34,15 +34,19 @@ Primary machine: 4090 GPU, Arch Linux. Also runs on Framework 12 (CPU-only, slow
 - Each region → `manga-ocr` → Japanese string
 - String → `fugashi` → tokenized words with readings and POS
 
-### Page Reader (`server.py` + `static/page-reader.html`)
-- Upload a PDF via file browser; server queues all pages as a background job immediately
-- Library view shows all works with a live progress bar; browser notification fires when done
-- Job state persisted in SQLite — interrupted jobs resume automatically on server restart
-- Pages rendered at 600 DPI and stored as PNGs in `data/pages/`; readable pages appear
-  as soon as they complete, without waiting for the whole job to finish
-- Reader view: navigate pages with prev/next, SVG bbox overlay (green = vertical, orange = horizontal)
-- Click a region to select it; right panel shows auto-OCR text as reference
-- Draw on the handwriting canvas → recognition candidates → click to confirm; auto-saves to SQLite
+### Page Reader (`server.py` + `static/page-reader.html` + `static/reader.html`)
+- **Library** (`/page-reader`) — upload a PDF via file browser; server queues all pages as a
+  background job immediately. Shows all works with a live progress bar; browser notification
+  fires when done. Job state persisted in SQLite — interrupted jobs resume automatically on
+  server restart. Pages rendered at 600 DPI and stored as PNGs in `data/pages/`; readable pages
+  appear as soon as they complete, without waiting for the whole job to finish. Click "Read" on
+  a ready work to open it.
+- **Reader** (`/read/{work_id}`) — its own page (no library chrome) so the manga page and
+  handwriting panel get the full viewport. Navigate pages with prev/next (current page kept in
+  the URL's `?page=` query so reloads/bookmarks return to the same spot), SVG bbox overlay
+  (green = vertical, orange = horizontal). Click a region to select it; right panel shows
+  auto-OCR text as reference. Draw on the handwriting canvas → recognition candidates → click
+  to confirm; auto-saves to SQLite.
 - SQLite (`data/wakatta.db`) stores Work → Page → Sentence; uploaded PDFs saved to `data/uploads/`
 
 ### Handwriting Recognition Webapp (`server.py` + `static/index.html`)
@@ -96,17 +100,18 @@ uv run setup_kanjivg.py
 
 # 3. Start the server
 #    On first start, downloads manga-ocr weights (~444 MB) and the CTD ONNX model (~50 MB)
-uv run uvicorn server:app --port 8000
+uv run uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
-Then open http://localhost:8000:
+Then open http://localhost:8000 (or http://192.168.86.207:8000 from another device on the LAN):
 - `/` → handwriting recognition (works offline after first load)
-- `/page-reader` → upload a PDF and start reading
+- `/page-reader` → library: upload a PDF, browse previous uploads
+- `/read/{work_id}` → reader for a single work, opened from the library
 
 ### Subsequent starts
 
 ```bash
-uv run uvicorn server:app --port 8000
+uv run uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
 Models and caches are already on disk; startup takes a few seconds to load manga-ocr and the KanjiVG cache.
