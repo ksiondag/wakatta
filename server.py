@@ -141,6 +141,20 @@ def crop_region(image: Image.Image, x1: int, y1: int, x2: int, y2: int) -> Image
     ))
 
 
+async def _ocr_region(page_id: int, x1: int, y1: int, x2: int, y2: int) -> str | None:
+    """Crop a region of a stored page PNG and run manga-ocr on it."""
+    img_path = PAGES_DIR / f"{page_id}.png"
+    if not img_path.exists():
+        raise HTTPException(404, "Page image not found")
+    if mocr is None:
+        return None
+    async with _process_lock:
+        page_image = await asyncio.to_thread(Image.open, img_path)
+        crop = crop_region(page_image, x1, y1, x2, y2)
+        text = await asyncio.to_thread(mocr, crop)
+        return text.strip() or None
+
+
 async def _process_one_page(
     pdf_path: Path,
     work_id: int,
@@ -322,8 +336,22 @@ class WorkCreate(BaseModel):
     title: str | None = None
 
 
+class SentenceCreate(BaseModel):
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+    direction: str = "v"
+    user_text: str | None = None
+
+
 class SentenceUpdate(BaseModel):
-    user_text: str
+    user_text: str | None = None
+    x1: int | None = None
+    y1: int | None = None
+    x2: int | None = None
+    y2: int | None = None
+    direction: str | None = None
 
 
 # ── Response helpers ───────────────────────────────────────────────────────────
@@ -539,12 +567,76 @@ def page_image(page_id: int):
     return FileResponse(img_path, media_type="image/png")
 
 
+@app.post("/api/pages/{page_id}/sentences", status_code=201)
+async def create_sentence(page_id: int, req: SentenceCreate):
+    with Session(engine) as session:
+        if session.get(Page, page_id) is None:
+            raise HTTPException(404, "Page not found")
+
+    x1, x2 = sorted((req.x1, req.x2))
+    y1, y2 = sorted((req.y1, req.y2))
+    if x2 - x1 < 4 or y2 - y1 < 4:
+        raise HTTPException(400, "Bounding box too small")
+
+    ocr_text = await _ocr_region(page_id, x1, y1, x2, y2)
+
+    with Session(engine) as session:
+        s = Sentence(
+            page_id=page_id,
+            x1=x1, y1=y1, x2=x2, y2=y2,
+            direction=req.direction if req.direction in ("v", "h") else "v",
+            prob=1.0,
+            ocr_text=ocr_text,
+            user_text=req.user_text,
+        )
+        session.add(s)
+        session.commit()
+        session.refresh(s)
+        return _sentence_dict(s)
+
+
 @app.put("/api/sentences/{sentence_id}")
-def update_sentence(sentence_id: int, update: SentenceUpdate):
+async def update_sentence(sentence_id: int, update: SentenceUpdate):
     with Session(engine) as session:
         s = session.get(Sentence, sentence_id)
         if s is None:
             raise HTTPException(404, "Sentence not found")
-        s.user_text = update.user_text
+        page_id = s.page_id
+
+        geometry_changed = None not in (update.x1, update.y1, update.x2, update.y2)
+        if geometry_changed:
+            x1, x2 = sorted((update.x1, update.x2))
+            y1, y2 = sorted((update.y1, update.y2))
+            if x2 - x1 < 4 or y2 - y1 < 4:
+                raise HTTPException(400, "Bounding box too small")
+
+        if update.direction is not None and update.direction in ("v", "h"):
+            s.direction = update.direction
+        if update.user_text is not None:
+            s.user_text = update.user_text
+
+        if geometry_changed:
+            s.x1, s.y1, s.x2, s.y2 = x1, y1, x2, y2
+
         session.commit()
-        return _sentence_dict(s)
+        session.refresh(s)
+
+    if geometry_changed:
+        ocr_text = await _ocr_region(page_id, x1, y1, x2, y2)
+        with Session(engine) as session:
+            s = session.get(Sentence, sentence_id)
+            s.ocr_text = ocr_text
+            session.commit()
+            session.refresh(s)
+
+    return _sentence_dict(s)
+
+
+@app.delete("/api/sentences/{sentence_id}", status_code=204)
+def delete_sentence(sentence_id: int):
+    with Session(engine) as session:
+        s = session.get(Sentence, sentence_id)
+        if s is None:
+            raise HTTPException(404, "Sentence not found")
+        session.delete(s)
+        session.commit()

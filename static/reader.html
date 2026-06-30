@@ -68,6 +68,13 @@ input:focus { outline: none; border-color: #7070cc; }
 #back-btn { padding: 5px 12px; font-size: 0.85rem; text-decoration: none; }
 #reader-work-title { flex: 1; font-size: 0.95rem; color: #aaa; }
 
+#sync-status { font-size: 0.78rem; color: #888; white-space: nowrap; }
+#sync-status.pending { color: #c8a040; }
+
+#edit-mode-btn { font-size: 0.85rem; padding: 5px 12px; }
+#edit-mode-btn.active { background: #4a2a2a; border-color: #6a4a4a; color: #e09090; }
+#edit-mode-btn.active:hover { background: #5a3434; }
+
 .page-nav {
   display: flex;
   align-items: center;
@@ -101,6 +108,7 @@ input:focus { outline: none; border-color: #7070cc; }
   transform-origin: center center;
   cursor: grab;
 }
+#image-container.edit-mode { cursor: crosshair; }
 
 #zoom-reset-btn {
   position: absolute;
@@ -119,9 +127,10 @@ input:focus { outline: none; border-color: #7070cc; }
   position: absolute;
   top: 0; left: 0;
   width: 100%; height: 100%;
-  cursor: pointer;
 }
 #bbox-svg rect { transition: fill 0.1s, stroke-width 0.1s; }
+#bbox-svg rect.pending-box { stroke-dasharray: 10 6; }
+#bbox-svg rect.draw-preview { fill: rgba(120,150,255,0.12); stroke: #7090ff; stroke-width: 3; stroke-dasharray: 8 5; pointer-events: none; }
 
 /* ── Handwriting panel ── */
 .hw-panel {
@@ -156,6 +165,8 @@ input:focus { outline: none; border-color: #7070cc; }
   font-size: 0.75rem; color: #666;
   text-transform: uppercase; letter-spacing: 0.05em;
 }
+.region-info-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#direction-toggle { padding: 3px 8px; font-size: 0.75rem; }
 #ocr-text { font-size: 1.1rem; color: #777; min-height: 1.4em; letter-spacing: 0.08em; word-break: break-all; }
 
 .user-text-row { display: flex; gap: 6px; align-items: center; }
@@ -169,6 +180,8 @@ input:focus { outline: none; border-color: #7070cc; }
 
 .save-row { display: flex; align-items: center; gap: 8px; }
 #save-status { font-size: 0.78rem; color: #666; }
+#delete-btn { padding: 5px 10px; font-size: 0.85rem; border-color: #6a4040; color: #d09090; }
+#delete-btn:hover { background: #4a2a2a; }
 
 .canvas-section {
   padding: 14px;
@@ -213,6 +226,8 @@ input:focus { outline: none; border-color: #7070cc; }
     <div class="reader-header">
       <a id="back-btn" href="/page-reader">← Library</a>
       <span id="reader-work-title"></span>
+      <span id="sync-status"></span>
+      <button id="edit-mode-btn" title="Draw new boxes / move &amp; resize existing ones (disables pan &amp; zoom)">▭ Edit Boxes</button>
       <div class="page-nav">
         <button id="prev-page">◀</button>
         <span id="page-counter">—</span>
@@ -239,7 +254,10 @@ input:focus { outline: none; border-color: #7070cc; }
         </div>
 
         <div class="region-info" id="region-info" style="display:none">
-          <div class="label">OCR (auto-detected)</div>
+          <div class="region-info-header">
+            <div class="label" id="ocr-label">OCR (auto-detected)</div>
+            <button id="direction-toggle" title="Toggle vertical/horizontal text direction">↕ v</button>
+          </div>
           <div id="ocr-text">—</div>
           <div class="label">Your text</div>
           <div class="user-text-row">
@@ -248,6 +266,7 @@ input:focus { outline: none; border-color: #7070cc; }
           </div>
           <div class="save-row">
             <button id="save-btn">Save</button>
+            <button id="delete-btn" title="Delete this bounding box">🗑 Delete</button>
             <span id="save-status"></span>
           </div>
         </div>
@@ -319,6 +338,7 @@ const ocrTextEl      = document.getElementById('ocr-text');
 const userTextEl     = document.getElementById('user-text');
 const undoBtnEl      = document.getElementById('undo-char');
 const saveBtnEl      = document.getElementById('save-btn');
+const deleteBtnEl    = document.getElementById('delete-btn');
 const saveStatEl     = document.getElementById('save-status');
 const hwCanvasEl     = document.getElementById('hw-canvas');
 const candidatesEl   = document.getElementById('candidates');
@@ -326,6 +346,128 @@ const clearBtnEl     = document.getElementById('clear-btn');
 const strokeCntEl    = document.getElementById('stroke-count');
 const hwStatEl       = document.getElementById('hw-status');
 const hwEmptyEl      = document.getElementById('hw-empty');
+
+const syncStatusEl     = document.getElementById('sync-status');
+const editModeBtnEl    = document.getElementById('edit-mode-btn');
+const ocrLabelEl       = document.getElementById('ocr-label');
+const directionToggleEl = document.getElementById('direction-toggle');
+
+// ── Offline bbox edit queue ─────────────────────────────────────────────────────
+// Custom boxes (and edits to existing ones) are queued locally first, since OCR
+// only runs on the server. The queue is flushed whenever the app is online.
+
+const QUEUE_KEY = 'wakatta:bboxQueue';
+let opQueue = (() => {
+  try { return JSON.parse(localStorage.getItem(QUEUE_KEY)) ?? []; } catch { return []; }
+})();
+let flushing = false;
+let tempIdCounter = 0;
+
+function persistQueue() {
+  localStorage.setItem(QUEUE_KEY, JSON.stringify(opQueue));
+}
+
+function updateSyncStatus() {
+  if (!opQueue.length) {
+    syncStatusEl.textContent = '';
+    syncStatusEl.classList.remove('pending');
+    return;
+  }
+  syncStatusEl.textContent = navigator.onLine
+    ? `Syncing ${opQueue.length}…`
+    : `${opQueue.length} pending (offline)`;
+  syncStatusEl.classList.add('pending');
+}
+
+// Queues whatever local state `sentences[idx]` currently holds (geometry,
+// direction, user_text) — find-or-create the queued op so repeated edits to the
+// same box (still offline) coalesce into one pending request instead of piling up.
+function syncSentence(idx) {
+  const s = sentences[idx];
+  const fields = { x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2, direction: s.direction, user_text: s.user_text };
+
+  if (s.tempId) {
+    let op = opQueue.find(o => o.type === 'create' && o.tempId === s.tempId);
+    if (!op) { op = { type: 'create', tempId: s.tempId, pageId: pageData.id }; opQueue.push(op); }
+    Object.assign(op, fields);
+  } else {
+    let op = opQueue.find(o => o.type === 'update' && o.sentenceId === s.id);
+    if (!op) { op = { type: 'update', sentenceId: s.id, pageId: pageData.id }; opQueue.push(op); }
+    Object.assign(op, fields);
+  }
+  persistQueue();
+  updateSyncStatus();
+  flushQueue();
+}
+
+// Removes a box. Not-yet-synced boxes are simply dropped from the queue; synced
+// ones get a queued 'delete' op (any pending 'update' for the same box is dropped
+// first, since there's no point syncing edits to something about to be deleted).
+function deleteSentence(idx) {
+  const s = sentences[idx];
+  sentences.splice(idx, 1);
+
+  if (s.tempId) {
+    opQueue = opQueue.filter(o => !(o.type === 'create' && o.tempId === s.tempId));
+  } else {
+    opQueue = opQueue.filter(o => !(o.type === 'update' && o.sentenceId === s.id));
+    opQueue.push({ type: 'delete', sentenceId: s.id, pageId: pageData.id });
+  }
+  persistQueue();
+  updateSyncStatus();
+  flushQueue();
+}
+
+async function flushQueue() {
+  if (flushing) return;
+  flushing = true;
+  try {
+    while (opQueue.length) {
+      const op = opQueue[0];
+      let res;
+      try {
+        if (op.type === 'create') {
+          const body = JSON.stringify({ x1: op.x1, y1: op.y1, x2: op.x2, y2: op.y2, direction: op.direction, user_text: op.user_text });
+          res = await fetch(`/api/pages/${op.pageId}/sentences`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+        } else if (op.type === 'update') {
+          const body = JSON.stringify({ x1: op.x1, y1: op.y1, x2: op.x2, y2: op.y2, direction: op.direction, user_text: op.user_text });
+          res = await fetch(`/api/sentences/${op.sentenceId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body });
+        } else {
+          res = await fetch(`/api/sentences/${op.sentenceId}`, { method: 'DELETE' });
+        }
+      } catch {
+        break; // offline / network failure — stop and retry later
+      }
+      if (!res.ok && res.status !== 404) break; // 404 on delete = already gone, treat as done
+
+      const onCurrentPage = currentPages[currentPageIdx]?.id === op.pageId;
+      if (op.type === 'delete') {
+        opQueue.shift();
+        persistQueue();
+      } else {
+        const data = await res.json();
+        opQueue.shift();
+        persistQueue();
+        if (onCurrentPage) {
+          const idx = op.type === 'create'
+            ? sentences.findIndex(s => s.tempId === op.tempId)
+            : sentences.findIndex(s => s.id === op.sentenceId);
+          if (idx !== -1) {
+            sentences[idx] = { ...data, pending: false };
+            renderBoxes();
+            if (activeIdx === idx) selectRegion(idx);
+          }
+        }
+      }
+      updateSyncStatus();
+    }
+  } finally {
+    flushing = false;
+    updateSyncStatus();
+  }
+}
+
+window.addEventListener('online', flushQueue);
 
 // ── Load work + pages ────────────────────────────────────────────────────────
 
@@ -361,14 +503,40 @@ async function navigateTo(idx) {
   const pageRecord = currentPages[idx];
   const res = await fetch(`/api/pages/${pageRecord.id}`);
   pageData  = await res.json();
-  sentences = pageData.sentences;
   activeIdx = null;
+
+  // Overlay any not-yet-synced local edits/creates/deletes on top of the server's data.
+  sentences = pageData.sentences
+    .filter(s => !opQueue.some(op => op.type === 'delete' && op.sentenceId === s.id))
+    .map(s => {
+      const upd = opQueue.find(op => op.type === 'update' && op.sentenceId === s.id);
+      return upd
+        ? { ...s, x1: upd.x1, y1: upd.y1, x2: upd.x2, y2: upd.y2, direction: upd.direction, user_text: upd.user_text, pending: true }
+        : s;
+    });
+  sentences.push(...opQueue
+    .filter(op => op.type === 'create' && op.pageId === pageRecord.id)
+    .map(op => ({
+      id: null, tempId: op.tempId,
+      x1: op.x1, y1: op.y1, x2: op.x2, y2: op.y2, direction: op.direction,
+      ocr_text: null, user_text: op.user_text ?? null, pending: true,
+    })));
 
   pageImgEl.src = `/api/pages/${pageRecord.id}/image`;
   pageImgEl.onload = () => resetZoom(); // refine fit-scale once real dimensions are laid out
   bboxSvgEl.setAttribute('viewBox', `0 0 ${pageData.width} ${pageData.height}`);
-  bboxSvgEl.innerHTML = '';
+  renderBoxes();
 
+  regionInfoEl.style.display = 'none';
+  hwEmptyEl.style.display = 'block';
+  clearCanvas();
+  hwStatEl.textContent = 'Select a region';
+  resetZoom();
+  flushQueue();
+}
+
+function renderBoxes() {
+  bboxSvgEl.innerHTML = '';
   sentences.forEach((s, i) => {
     const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
     rect.setAttribute('x', s.x1);
@@ -376,9 +544,16 @@ async function navigateTo(idx) {
     rect.setAttribute('width', s.x2 - s.x1);
     rect.setAttribute('height', s.y2 - s.y1);
     rect.setAttribute('rx', '2');
-    rect.setAttribute('fill', s.user_text ? 'rgba(80,160,80,0.12)' : 'rgba(0,0,0,0.01)');
-    rect.setAttribute('stroke', s.direction === 'v' ? '#00c864' : '#c87800');
-    rect.setAttribute('stroke-width', '3');
+    if (i === activeIdx) {
+      rect.setAttribute('fill', 'rgba(100,100,255,0.18)');
+      rect.setAttribute('stroke', '#8888ff');
+      rect.setAttribute('stroke-width', '5');
+    } else {
+      rect.setAttribute('fill', s.user_text ? 'rgba(80,160,80,0.12)' : 'rgba(0,0,0,0.01)');
+      rect.setAttribute('stroke', s.direction === 'v' ? '#00c864' : '#c87800');
+      rect.setAttribute('stroke-width', '3');
+    }
+    if (s.pending) rect.classList.add('pending-box');
     rect.dataset.idx = i;
     rect.addEventListener('click', () => selectRegion(i));
     bboxSvgEl.appendChild(rect);
@@ -390,15 +565,10 @@ async function navigateTo(idx) {
     label.setAttribute('fill', s.direction === 'v' ? '#00c864' : '#c87800');
     label.setAttribute('font-family', 'sans-serif');
     label.setAttribute('pointer-events', 'none');
-    label.textContent = i + 1;
+    label.dataset.idx = i;
+    label.textContent = s.pending ? `${i + 1} ⏳` : i + 1;
     bboxSvgEl.appendChild(label);
   });
-
-  regionInfoEl.style.display = 'none';
-  hwEmptyEl.style.display = 'block';
-  clearCanvas();
-  hwStatEl.textContent = 'Select a region';
-  resetZoom();
 }
 
 // ── Page zoom & pan (pinch / ctrl-wheel / drag — scoped to the image panel only) ─
@@ -441,6 +611,7 @@ function setZoom(newScale) {
 }
 
 imagePanelEl.addEventListener('wheel', e => {
+  if (editMode) return;
   e.preventDefault();
   if (e.ctrlKey || e.metaKey) {
     setZoom(zoomScale * Math.exp(-e.deltaY * 0.01));
@@ -452,7 +623,7 @@ imagePanelEl.addEventListener('wheel', e => {
   }
 }, { passive: false });
 
-imagePanelEl.addEventListener('dblclick', () => resetZoom());
+imagePanelEl.addEventListener('dblclick', () => { if (!editMode) resetZoom(); });
 document.getElementById('zoom-reset-btn').addEventListener('click', () => resetZoom());
 
 const activePointers = new Map();
@@ -491,6 +662,7 @@ function onPointerUp(e) {
     window.removeEventListener('pointercancel', onPointerUp);
     dragStart = null;
     pinchStartDist = 0;
+    if (!editMode) imageContainerEl.style.cursor = 'grab';
   } else if (activePointers.size === 1) {
     const [[, p]] = activePointers;
     dragStart = { x: p.x, y: p.y, panX, panY };
@@ -499,6 +671,7 @@ function onPointerUp(e) {
 }
 
 imagePanelEl.addEventListener('pointerdown', e => {
+  if (editMode) { handleEditPointerDown(e); return; }
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   if (activePointers.size === 0) {
     window.addEventListener('pointermove', onPointerMove);
@@ -507,6 +680,7 @@ imagePanelEl.addEventListener('pointerdown', e => {
   }
   activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   didDrag = false;
+  imageContainerEl.style.cursor = 'grabbing';
 
   if (activePointers.size === 1) {
     dragStart = { x: e.clientX, y: e.clientY, panX, panY };
@@ -525,6 +699,193 @@ bboxSvgEl.addEventListener('click', e => {
 
 window.addEventListener('resize', () => { clampPan(); applyTransform(); });
 
+// ── Box editing mode (draw new boxes, move/resize existing ones) ───────────────
+// Default mode is pan/zoom (above). This mode disables it entirely so gestures
+// over the page only ever affect bounding boxes.
+
+let editMode = false;
+let editAction = null;
+const MIN_BOX_PAGE_PX = 10; // minimum drawn box size, in page pixels, to keep it
+const HANDLE_PX = 14;       // corner-grab tolerance, in screen px
+
+editModeBtnEl.addEventListener('click', () => {
+  editMode = !editMode;
+  editModeBtnEl.classList.toggle('active', editMode);
+  editModeBtnEl.textContent = editMode ? '✓ Editing Boxes' : '▭ Edit Boxes';
+  imageContainerEl.classList.toggle('edit-mode', editMode);
+  imageContainerEl.style.cursor = editMode ? 'crosshair' : 'grab';
+});
+
+function clientToSvg(clientX, clientY) {
+  const ctm = bboxSvgEl.getScreenCTM();
+  if (!ctm) return { x: 0, y: 0 };
+  const pt = bboxSvgEl.createSVGPoint();
+  pt.x = clientX; pt.y = clientY;
+  const p = pt.matrixTransform(ctm.inverse());
+  return { x: p.x, y: p.y };
+}
+
+function svgUnitsPerScreenPx() {
+  const ctm = bboxSvgEl.getScreenCTM();
+  if (!ctm) return 1;
+  return 1 / Math.hypot(ctm.a, ctm.b);
+}
+
+function updateRectEl(idx) {
+  const s = sentences[idx];
+  const rect = bboxSvgEl.querySelector(`rect[data-idx="${idx}"]`);
+  if (rect) {
+    rect.setAttribute('x', s.x1); rect.setAttribute('y', s.y1);
+    rect.setAttribute('width', s.x2 - s.x1); rect.setAttribute('height', s.y2 - s.y1);
+  }
+  const label = bboxSvgEl.querySelector(`text[data-idx="${idx}"]`);
+  if (label) { label.setAttribute('x', s.x1 + 3); label.setAttribute('y', s.y1 - 4); }
+}
+
+// Hit-tests in SVG (page-pixel) space: corners/body of the selected box first
+// (so the active box is always draggable even if it overlaps another), then
+// falls back to any other box under the point (select + start moving it).
+function hitTest(px, py) {
+  if (activeIdx !== null) {
+    const s = sentences[activeIdx];
+    const tol = HANDLE_PX * svgUnitsPerScreenPx();
+    const corners = { nw: [s.x1, s.y1], ne: [s.x2, s.y1], sw: [s.x1, s.y2], se: [s.x2, s.y2] };
+    for (const [corner, [cx, cy]] of Object.entries(corners)) {
+      if (Math.hypot(px - cx, py - cy) <= tol) return { type: 'resize', idx: activeIdx, corner };
+    }
+    if (px >= s.x1 && px <= s.x2 && py >= s.y1 && py <= s.y2) return { type: 'move', idx: activeIdx };
+  }
+  for (let i = sentences.length - 1; i >= 0; i--) {
+    const s = sentences[i];
+    if (px >= s.x1 && px <= s.x2 && py >= s.y1 && py <= s.y2) return { type: 'move', idx: i, reselect: true };
+  }
+  return null;
+}
+
+// Resize cursors follow the diagonal of the corner being dragged. Moving a box
+// reuses the grab/grabbing metaphor from panning — same icon, different scope.
+function cursorForHit(hit) {
+  if (!hit) return 'crosshair';
+  if (hit.type === 'move') return 'grab';
+  return (hit.corner === 'nw' || hit.corner === 'se') ? 'nwse-resize' : 'nesw-resize';
+}
+
+// Hover feedback (no gesture in progress) — separate from the gesture-driven
+// cursor changes below, which take over for the duration of an active drag.
+imagePanelEl.addEventListener('pointermove', e => {
+  if (editMode) {
+    if (editAction) return;
+    const p = clientToSvg(e.clientX, e.clientY);
+    imageContainerEl.style.cursor = cursorForHit(hitTest(p.x, p.y));
+  } else if (!dragStart && activePointers.size === 0) {
+    imageContainerEl.style.cursor = 'grab';
+  }
+});
+
+function handleEditPointerDown(e) {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  const p = clientToSvg(e.clientX, e.clientY);
+  const hit = hitTest(p.x, p.y);
+  didDrag = false;
+  imageContainerEl.style.cursor = hit && hit.type === 'move' ? 'grabbing' : cursorForHit(hit);
+
+  if (hit) {
+    if (hit.reselect) selectRegion(hit.idx);
+    const s = sentences[hit.idx];
+    editAction = { ...hit, orig: { x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2 }, start: p };
+  } else {
+    const preview = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    preview.setAttribute('class', 'draw-preview');
+    preview.setAttribute('x', p.x); preview.setAttribute('y', p.y);
+    preview.setAttribute('width', 0); preview.setAttribute('height', 0);
+    bboxSvgEl.appendChild(preview);
+    editAction = { type: 'draw', start: p, previewEl: preview };
+  }
+
+  window.addEventListener('pointermove', handleEditPointerMove);
+  window.addEventListener('pointerup', handleEditPointerUp);
+  window.addEventListener('pointercancel', handleEditPointerUp);
+}
+
+function handleEditPointerMove(e) {
+  if (!editAction) return;
+  const p = clientToSvg(e.clientX, e.clientY);
+  const dx = p.x - editAction.start.x;
+  const dy = p.y - editAction.start.y;
+  if (Math.abs(dx) > 2 || Math.abs(dy) > 2) didDrag = true;
+
+  const maxW = pageData.width, maxH = pageData.height;
+
+  if (editAction.type === 'draw') {
+    const x1 = Math.max(0, Math.min(editAction.start.x, p.x));
+    const y1 = Math.max(0, Math.min(editAction.start.y, p.y));
+    const x2 = Math.min(maxW, Math.max(editAction.start.x, p.x));
+    const y2 = Math.min(maxH, Math.max(editAction.start.y, p.y));
+    editAction.previewEl.setAttribute('x', x1);
+    editAction.previewEl.setAttribute('y', y1);
+    editAction.previewEl.setAttribute('width', x2 - x1);
+    editAction.previewEl.setAttribute('height', y2 - y1);
+    editAction.final = { x1, y1, x2, y2 };
+  } else if (editAction.type === 'move') {
+    const s = sentences[editAction.idx];
+    const o = editAction.orig;
+    const w = o.x2 - o.x1, h = o.y2 - o.y1;
+    const nx1 = Math.max(0, Math.min(maxW - w, o.x1 + dx));
+    const ny1 = Math.max(0, Math.min(maxH - h, o.y1 + dy));
+    s.x1 = nx1; s.y1 = ny1; s.x2 = nx1 + w; s.y2 = ny1 + h;
+    updateRectEl(editAction.idx);
+  } else if (editAction.type === 'resize') {
+    const s = sentences[editAction.idx];
+    const o = editAction.orig;
+    let { x1, y1, x2, y2 } = o;
+    if (editAction.corner === 'nw') { x1 = o.x1 + dx; y1 = o.y1 + dy; }
+    else if (editAction.corner === 'ne') { x2 = o.x2 + dx; y1 = o.y1 + dy; }
+    else if (editAction.corner === 'sw') { x1 = o.x1 + dx; y2 = o.y2 + dy; }
+    else if (editAction.corner === 'se') { x2 = o.x2 + dx; y2 = o.y2 + dy; }
+
+    x1 = Math.max(0, x1); y1 = Math.max(0, y1);
+    x2 = Math.min(maxW, x2); y2 = Math.min(maxH, y2);
+    const MIN = 6;
+    if (x2 - x1 < MIN) { if (editAction.corner === 'nw' || editAction.corner === 'sw') x1 = x2 - MIN; else x2 = x1 + MIN; }
+    if (y2 - y1 < MIN) { if (editAction.corner === 'nw' || editAction.corner === 'ne') y1 = y2 - MIN; else y2 = y1 + MIN; }
+
+    s.x1 = x1; s.y1 = y1; s.x2 = x2; s.y2 = y2;
+    updateRectEl(editAction.idx);
+  }
+}
+
+function handleEditPointerUp(e) {
+  if (!editAction) return;
+  window.removeEventListener('pointermove', handleEditPointerMove);
+  window.removeEventListener('pointerup', handleEditPointerUp);
+  window.removeEventListener('pointercancel', handleEditPointerUp);
+
+  if (editAction.type === 'draw') {
+    const f = editAction.final;
+    editAction.previewEl.remove();
+    if (f && (f.x2 - f.x1) >= MIN_BOX_PAGE_PX && (f.y2 - f.y1) >= MIN_BOX_PAGE_PX) {
+      const tempId = `tmp-${Date.now()}-${tempIdCounter++}`;
+      const direction = (f.y2 - f.y1) > (f.x2 - f.x1) * 1.5 ? 'v' : 'h';
+      sentences.push({
+        id: null, tempId,
+        x1: Math.round(f.x1), y1: Math.round(f.y1), x2: Math.round(f.x2), y2: Math.round(f.y2),
+        direction, ocr_text: null, user_text: null, pending: true,
+      });
+      const idx = sentences.length - 1;
+      selectRegion(idx);
+      syncSentence(idx);
+    }
+  } else if (editAction.type === 'move' || editAction.type === 'resize') {
+    const s = sentences[editAction.idx];
+    s.x1 = Math.round(s.x1); s.y1 = Math.round(s.y1); s.x2 = Math.round(s.x2); s.y2 = Math.round(s.y2);
+    updateRectEl(editAction.idx);
+    if (didDrag) syncSentence(editAction.idx);
+  }
+  editAction = null;
+  const p = clientToSvg(e.clientX, e.clientY);
+  imageContainerEl.style.cursor = cursorForHit(hitTest(p.x, p.y));
+}
+
 // ── Region selection ───────────────────────────────────────────────────────────
 
 function selectRegion(idx) {
@@ -532,25 +893,14 @@ function selectRegion(idx) {
   const s = sentences[idx];
 
   regionCtrEl.textContent = `${idx + 1} / ${sentences.length}`;
-
-  bboxSvgEl.querySelectorAll('rect').forEach(r => {
-    const ri = parseInt(r.dataset.idx, 10);
-    const si = sentences[ri];
-    if (ri === idx) {
-      r.setAttribute('fill', 'rgba(100,100,255,0.18)');
-      r.setAttribute('stroke', '#8888ff');
-      r.setAttribute('stroke-width', '5');
-    } else {
-      r.setAttribute('fill', si.user_text ? 'rgba(80,160,80,0.12)' : 'rgba(0,0,0,0.01)');
-      r.setAttribute('stroke', si.direction === 'v' ? '#00c864' : '#c87800');
-      r.setAttribute('stroke-width', '3');
-    }
-  });
+  renderBoxes();
 
   regionInfoEl.style.display = 'flex';
   hwEmptyEl.style.display = 'none';
+  ocrLabelEl.textContent = s.pending ? 'OCR (awaiting sync)' : 'OCR (auto-detected)';
   ocrTextEl.textContent = s.ocr_text ?? '—';
   userTextEl.value = s.user_text ?? '';
+  directionToggleEl.textContent = s.direction === 'v' ? '↕ v' : '↔ h';
   saveStatEl.textContent = '';
   clearCanvas();
   hwStatEl.textContent = 'Draw a character';
@@ -563,28 +913,39 @@ nextRegBtnEl.addEventListener('click', () => { if (activeIdx < sentences.length 
 
 let saveTimer = null;
 
-async function saveRegion() {
+function saveRegion() {
   if (activeIdx === null) return;
-  const s = sentences[activeIdx];
-  try {
-    const res = await fetch(`/api/sentences/${s.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_text: userTextEl.value }),
-    });
-    if (!res.ok) { saveStatEl.textContent = 'Save failed'; return; }
-    const updated = await res.json();
-    sentences[activeIdx].user_text = updated.user_text;
-    saveStatEl.textContent = 'Saved ✓';
-    const rect = bboxSvgEl.querySelector(`rect[data-idx="${activeIdx}"]`);
-    if (rect && updated.user_text) rect.setAttribute('fill', 'rgba(80,160,80,0.12)');
-    setTimeout(() => { saveStatEl.textContent = ''; }, 2000);
-  } catch (err) {
-    saveStatEl.textContent = 'Save failed';
-  }
+  sentences[activeIdx].user_text = userTextEl.value;
+  syncSentence(activeIdx);
+  renderBoxes();
+  saveStatEl.textContent = navigator.onLine ? 'Saved ✓' : 'Saved (offline) ⏳';
+  setTimeout(() => { saveStatEl.textContent = ''; }, 2000);
 }
 
 saveBtnEl.addEventListener('click', saveRegion);
+
+deleteBtnEl.addEventListener('click', () => {
+  if (activeIdx === null) return;
+  if (!confirm('Delete this bounding box? This cannot be undone.')) return;
+  const idx = activeIdx;
+  activeIdx = null;
+  deleteSentence(idx);
+  regionInfoEl.style.display = 'none';
+  hwEmptyEl.style.display = 'block';
+  regionCtrEl.textContent = sentences.length ? `— / ${sentences.length}` : '—';
+  clearCanvas();
+  hwStatEl.textContent = 'Select a region';
+  renderBoxes();
+});
+
+directionToggleEl.addEventListener('click', () => {
+  if (activeIdx === null) return;
+  const s = sentences[activeIdx];
+  s.direction = s.direction === 'v' ? 'h' : 'v';
+  directionToggleEl.textContent = s.direction === 'v' ? '↕ v' : '↔ h';
+  renderBoxes();
+  syncSentence(activeIdx);
+});
 userTextEl.addEventListener('input', () => {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(saveRegion, 1200);
