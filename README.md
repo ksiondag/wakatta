@@ -35,13 +35,15 @@ Primary machine: 4090 GPU, Arch Linux. Also runs on Framework 12 (CPU-only, slow
 - String → `fugashi` → tokenized words with readings and POS
 
 ### Page Reader (`server.py` + `static/page-reader.html`)
-- Enter a PDF path + page number; server runs the full pipeline and persists results
-- Page image displayed with SVG bounding box overlay (green = vertical regions, orange = horizontal)
-- Click any region to select it; right panel shows the auto-OCR text as reference
-- Draw characters on the handwriting canvas → candidates appear → click to confirm
-- Confirmed characters append to the region's transcript and auto-save to SQLite
-- SQLite database (`data/wakatta.db`) stores Work → Page → Sentence hierarchy
-- Page images cached in `data/pages/`; re-processing the same page returns stored data
+- Upload a PDF via file browser; server queues all pages as a background job immediately
+- Library view shows all works with a live progress bar; browser notification fires when done
+- Job state persisted in SQLite — interrupted jobs resume automatically on server restart
+- Pages rendered at 600 DPI and stored as PNGs in `data/pages/`; readable pages appear
+  as soon as they complete, without waiting for the whole job to finish
+- Reader view: navigate pages with prev/next, SVG bbox overlay (green = vertical, orange = horizontal)
+- Click a region to select it; right panel shows auto-OCR text as reference
+- Draw on the handwriting canvas → recognition candidates → click to confirm; auto-saves to SQLite
+- SQLite (`data/wakatta.db`) stores Work → Page → Sentence; uploaded PDFs saved to `data/uploads/`
 
 ### Handwriting Recognition Webapp (`server.py` + `static/index.html`)
 - FastAPI server loads KanjiVG stroke database on startup, generates `static/db.json`
@@ -73,12 +75,11 @@ uv sync
 # Download KanjiVG stroke data
 uv run setup_kanjivg.py
 
-# Start handwriting recognition server
+# Start the server
 uv run uvicorn server:app --reload --port 8000
 # Then open http://localhost:8000
-
-# Run OCR pipeline on a manga page (edit PAGE_NUM in main.py first)
-uv run main.py
+# - /            → handwriting recognition
+# - /page-reader → upload a PDF and start reading
 ```
 
 Models download automatically on first run:
@@ -130,11 +131,32 @@ Work                              ← implemented
 
 ## Next Steps
 
-### Pipeline
+### Ingestion
 - [x] **SQLite data model** — Work/Page/Sentence schema with SQLAlchemy
-- [x] **Ingestion endpoint** — `POST /api/process` runs CTD + OCR and persists to the database
-- [ ] **Word layer** — run `fugashi` tokenization on confirmed `user_text`; populate Word/WordOccurrence tables
+- [x] **Whole-PDF ingestion** — `POST /api/works/{id}/process-all` queues all pages as a
+      background job; client polls `GET /api/jobs/{id}` for progress
+- [x] **Job persistence** — job state stored in SQLite; interrupted jobs resume on server restart
+- [ ] **Word layer** — run `fugashi` tokenization on confirmed `user_text`; populate
+      Word/WordOccurrence tables
 - [ ] **Study deck** — connect ingested words to FSRS review cards
+
+### Offline & Sync
+- [ ] **Client-side SQLite** — embed SQLite WASM (`@sqlite.org/sqlite-wasm` + OPFS) in
+      the webapp; mirror the Work/Page/Sentence schema so all reads work offline
+- [ ] **Selective offline download** — "Download for offline" button on a work or chapter;
+      fetches all page images and sentence data and writes them into the client DB.
+      Service worker intercepts `/api/pages/{id}/image` requests and serves from local
+      blob store when offline.
+- [ ] **Online/offline sync** — track mutations in a client-side log (row + timestamp);
+      on reconnect, replay unsynced writes to the server. Server wins for OCR data;
+      client wins for `user_text` edits made offline.
+- [x] **Upload UI** — file browser uploads PDF to `data/uploads/` and triggers ingestion in one step
+
+### Quality
+- [x] **Page transcription UI** — page reader with SVG bbox overlay; click a region to
+      transcribe its text via handwriting input when OCR fails or is wrong
+- [ ] **Bounding box editing** — add, move, and resize detected regions directly on the page image
+- [ ] **Pitch accent** — add OJAD or accent dictionary lookup to word analysis
 
 ### Kanji
 - [ ] **KANJIDIC2 integration** — radical breakdown per kanji character
@@ -145,12 +167,6 @@ Work                              ← implemented
 - [ ] **Switch CTD to `onnxruntime-gpu`** on the 4090 machine for faster detection
 - [ ] **`HF_HOME=./models`** — consolidate all model weights into the project directory
       for easy portability between machines
-
-### Quality
-- [x] **Page transcription UI** — page reader with SVG bbox overlay; click a region to
-      transcribe its text via handwriting input when OCR fails or is wrong
-- [ ] **Bounding box editing** — add, move, and resize detected regions directly on the page image
-- [ ] **Pitch accent** — add OJAD or accent dictionary lookup to word analysis
 
 ### QoL — Handwriting
 - [ ] **Multi-character word input** — user should be able to write a whole word without
