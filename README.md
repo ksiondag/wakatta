@@ -68,25 +68,52 @@ Primary machine: 4090 GPU, Arch Linux. Also runs on Framework 12 (CPU-only, slow
 
 ## Setup
 
+### Prerequisites
+
+- **Python 3.14** — managed automatically by uv
+- **uv** — install from https://docs.astral.sh/uv/
+- **MeCab** with UniDic — required by `fugashi` for tokenization:
+  ```bash
+  # Arch Linux
+  sudo pacman -S mecab mecab-ipadic
+  python -m unidic download
+
+  # Debian / Ubuntu
+  sudo apt install mecab libmecab-dev mecab-ipadic-utf8
+  python -m unidic download
+  ```
+- **CUDA** (optional) — manga-ocr will use the GPU automatically if PyTorch detects CUDA
+
+### First-time setup
+
 ```bash
-# Install uv (https://docs.astral.sh/uv/)
+# 1. Install Python dependencies
 uv sync
 
-# Download KanjiVG stroke data
+# 2. Download and parse KanjiVG stroke data (~6700 characters)
+#    Slow on first run (parallelised SVG parsing); fast on subsequent runs via cache
 uv run setup_kanjivg.py
 
-# Start the server
-uv run uvicorn server:app --reload --port 8000
-# Then open http://localhost:8000
-# - /            → handwriting recognition
-# - /page-reader → upload a PDF and start reading
+# 3. Start the server
+#    On first start, downloads manga-ocr weights (~444 MB) and the CTD ONNX model (~50 MB)
+uv run uvicorn server:app --port 8000
 ```
 
-Models download automatically on first run:
-- `manga-ocr` weights from HuggingFace (~444MB, cached in `~/.cache/huggingface/`)
-- CTD ONNX model from GitHub releases (~50MB, cached in `models/`)
+Then open http://localhost:8000:
+- `/` → handwriting recognition (works offline after first load)
+- `/page-reader` → upload a PDF and start reading
 
-For fully offline use after initial setup: set `HF_HUB_OFFLINE=1`.
+### Subsequent starts
+
+```bash
+uv run uvicorn server:app --port 8000
+```
+
+Models and caches are already on disk; startup takes a few seconds to load manga-ocr and the KanjiVG cache.
+
+### Offline use
+
+After the initial setup and at least one server start, set `HF_HUB_OFFLINE=1` to prevent any outbound model-hub requests.
 
 ---
 
