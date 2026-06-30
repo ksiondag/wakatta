@@ -7,6 +7,7 @@ Recognition pipeline:
 """
 
 import re
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -187,6 +188,30 @@ def _save_cache(db: KanjiVGDatabase, cache_path: Path) -> None:
 SVG_CACHE_DIR = Path("data/kanjivg_parsed")
 
 
+def _process_svg_file(svg_file: Path) -> tuple[str | None, list[np.ndarray] | None, str | None]:
+    """Parse or load one SVG file. Returns (char, strokes, error_msg)."""
+    try:
+        char = chr(int(svg_file.stem, 16))
+    except ValueError:
+        return None, None, None
+
+    npy_path = SVG_CACHE_DIR / f"{svg_file.stem}.npy"
+    try:
+        if npy_path.exists():
+            stacked = np.load(npy_path)
+            strokes = [stacked[j] for j in range(len(stacked))]
+        else:
+            strokes = _parse_svg_strokes(svg_file.read_text(encoding="utf-8"))
+            if strokes:
+                strokes = _normalize(strokes)
+                np.save(npy_path, np.stack(strokes))
+        if strokes:
+            return char, strokes, None
+        return char, None, f"[empty] {svg_file.name} ({char!r})"
+    except Exception as e:
+        return char, None, f"[error] {svg_file.name} ({char!r}): {e}"
+
+
 def _parse_svgs(data_dir: Path, subset: str | None) -> KanjiVGDatabase:
     db = KanjiVGDatabase()
     SVG_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -207,33 +232,20 @@ def _parse_svgs(data_dir: Path, subset: str | None) -> KanjiVGDatabase:
         print(f"Loading full KanjiVG ({len(files)} files, {cached} already cached)...")
 
     errors: list[str] = []
+    done = 0
     total = len(files)
-    for i, svg_file in enumerate(files):
-        if i % 5 == 0 and i > 0:
-            print(f"  {i}/{total}")
-        try:
-            codepoint = int(svg_file.stem, 16)
-            char = chr(codepoint)
-        except ValueError:
-            continue
 
-        npy_path = SVG_CACHE_DIR / f"{svg_file.stem}.npy"
-
-        try:
-            if npy_path.exists():
-                stacked = np.load(npy_path)  # (n_strokes, SAMPLES_PER_STROKE, 2)
-                strokes = [stacked[j] for j in range(len(stacked))]
-            else:
-                strokes = _parse_svg_strokes(svg_file.read_text(encoding="utf-8"))
-                if strokes:
-                    strokes = _normalize(strokes)
-                    np.save(npy_path, np.stack(strokes))
-            if strokes:
+    with ProcessPoolExecutor() as pool:
+        futures = {pool.submit(_process_svg_file, f): f for f in files}
+        for future in as_completed(futures):
+            done += 1
+            if done % 500 == 0:
+                print(f"  {done}/{total}")
+            char, strokes, error = future.result()
+            if error:
+                errors.append(error)
+            elif char and strokes:
                 db.add(char, strokes)
-            else:
-                errors.append(f"  [empty] {svg_file.name} ({char!r})")
-        except Exception as e:
-            errors.append(f"  [error] {svg_file.name} ({char!r}): {e}")
 
     if errors:
         print(f"{len(errors)} problems:")
