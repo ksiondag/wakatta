@@ -44,7 +44,10 @@ Primary machine: 4090 GPU, Arch Linux. Also runs on Framework 12 (CPU-only, slow
 - **Reader** (`/read/{work_id}`) — its own page (no library chrome) so the manga page and
   handwriting panel get the full viewport. Navigate pages with prev/next (current page kept in
   the URL's `?page=` query so reloads/bookmarks return to the same spot), SVG bbox overlay
-  (green = vertical, orange = horizontal). Click a region to select it; right panel shows
+  (green = vertical, orange = horizontal). Pinch, ctrl/cmd+wheel, or two-finger trackpad gestures
+  zoom the page image only — the navbar, page nav, and handwriting panel stay put; plain
+  wheel/drag pans. Default view (and the "⤢ Fit" button) fits the whole page in the panel.
+  Click a region to select it; right panel shows
   auto-OCR text as reference. Draw on the handwriting canvas → recognition candidates → click
   to confirm; auto-saves to SQLite.
 - SQLite (`data/wakatta.db`) stores Work → Page → Sentence; uploaded PDFs saved to `data/uploads/`

@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Wakatta — Reader</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -85,18 +85,33 @@ input:focus { outline: none; border-color: #7070cc; }
 /* ── Image panel ── */
 .image-panel {
   flex: 1;
-  overflow: auto;
+  position: relative;
+  overflow: hidden;
   padding: 16px;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
+  touch-action: none;
 }
 
 #image-container {
   position: relative;
   display: inline-block;
   line-height: 0;
+  transform-origin: center center;
+  cursor: grab;
 }
+
+#zoom-reset-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  font-size: 0.8rem;
+  padding: 5px 10px;
+  opacity: 0.8;
+}
+#zoom-reset-btn:hover { opacity: 1; }
 
 #page-img { display: block; max-width: 100%; height: auto; }
 
@@ -208,6 +223,7 @@ input:focus { outline: none; border-color: #7070cc; }
     <div class="reader-main">
 
       <div class="image-panel">
+        <button id="zoom-reset-btn" title="Reset zoom to fit the full page">⤢ Fit</button>
         <div id="image-container">
           <img id="page-img" alt="manga page">
           <svg id="bbox-svg" xmlns="http://www.w3.org/2000/svg"></svg>
@@ -289,6 +305,8 @@ const prevPageBtnEl  = document.getElementById('prev-page');
 const nextPageBtnEl  = document.getElementById('next-page');
 const pageCounterEl  = document.getElementById('page-counter');
 
+const imagePanelEl    = document.querySelector('.image-panel');
+const imageContainerEl = document.getElementById('image-container');
 const pageImgEl      = document.getElementById('page-img');
 const bboxSvgEl      = document.getElementById('bbox-svg');
 
@@ -347,6 +365,7 @@ async function navigateTo(idx) {
   activeIdx = null;
 
   pageImgEl.src = `/api/pages/${pageRecord.id}/image`;
+  pageImgEl.onload = () => resetZoom(); // refine fit-scale once real dimensions are laid out
   bboxSvgEl.setAttribute('viewBox', `0 0 ${pageData.width} ${pageData.height}`);
   bboxSvgEl.innerHTML = '';
 
@@ -379,7 +398,132 @@ async function navigateTo(idx) {
   hwEmptyEl.style.display = 'block';
   clearCanvas();
   hwStatEl.textContent = 'Select a region';
+  resetZoom();
 }
+
+// ── Page zoom & pan (pinch / ctrl-wheel / drag — scoped to the image panel only) ─
+
+let zoomScale = 1, panX = 0, panY = 0;
+let didDrag = false;
+const MIN_ZOOM = 0.1, MAX_ZOOM = 4;
+
+function applyTransform() {
+  imageContainerEl.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomScale})`;
+}
+
+function clampPan() {
+  const scaledW = imageContainerEl.offsetWidth  * zoomScale;
+  const scaledH = imageContainerEl.offsetHeight * zoomScale;
+  const maxPanX = Math.max(0, (scaledW - imagePanelEl.clientWidth)  / 2);
+  const maxPanY = Math.max(0, (scaledH - imagePanelEl.clientHeight) / 2);
+  panX = Math.min(maxPanX, Math.max(-maxPanX, panX));
+  panY = Math.min(maxPanY, Math.max(-maxPanY, panY));
+}
+
+// "Fit" scale shrinks the (already width-fit) page further if its full height
+// doesn't fit the panel, so the default/reset view always shows the whole page.
+function computeFitScale() {
+  const h = imageContainerEl.offsetHeight;
+  if (!h) return 1;
+  return Math.min(1, imagePanelEl.clientHeight / h);
+}
+
+function resetZoom() {
+  zoomScale = computeFitScale();
+  panX = 0; panY = 0;
+  applyTransform();
+}
+
+function setZoom(newScale) {
+  zoomScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, newScale));
+  clampPan();
+  applyTransform();
+}
+
+imagePanelEl.addEventListener('wheel', e => {
+  e.preventDefault();
+  if (e.ctrlKey || e.metaKey) {
+    setZoom(zoomScale * Math.exp(-e.deltaY * 0.01));
+  } else {
+    panX -= e.deltaX;
+    panY -= e.deltaY;
+    clampPan();
+    applyTransform();
+  }
+}, { passive: false });
+
+imagePanelEl.addEventListener('dblclick', () => resetZoom());
+document.getElementById('zoom-reset-btn').addEventListener('click', () => resetZoom());
+
+const activePointers = new Map();
+let pinchStartDist = 0, pinchStartScale = 1;
+let dragStart = null;
+
+function pointerDist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+function onPointerMove(e) {
+  if (!activePointers.has(e.pointerId)) return;
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (activePointers.size >= 2) {
+    const pts = [...activePointers.values()].slice(0, 2);
+    const d = pointerDist(pts[0], pts[1]);
+    if (pinchStartDist > 0) {
+      setZoom(pinchStartScale * (d / pinchStartDist));
+      didDrag = true;
+    }
+  } else if (dragStart) {
+    const dx = e.clientX - dragStart.x;
+    const dy = e.clientY - dragStart.y;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) didDrag = true;
+    panX = dragStart.panX + dx;
+    panY = dragStart.panY + dy;
+    clampPan();
+    applyTransform();
+  }
+}
+
+function onPointerUp(e) {
+  activePointers.delete(e.pointerId);
+  if (activePointers.size === 0) {
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    window.removeEventListener('pointercancel', onPointerUp);
+    dragStart = null;
+    pinchStartDist = 0;
+  } else if (activePointers.size === 1) {
+    const [[, p]] = activePointers;
+    dragStart = { x: p.x, y: p.y, panX, panY };
+    pinchStartDist = 0;
+  }
+}
+
+imagePanelEl.addEventListener('pointerdown', e => {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  if (activePointers.size === 0) {
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerUp);
+  }
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  didDrag = false;
+
+  if (activePointers.size === 1) {
+    dragStart = { x: e.clientX, y: e.clientY, panX, panY };
+  } else if (activePointers.size === 2) {
+    dragStart = null;
+    const pts = [...activePointers.values()];
+    pinchStartDist = pointerDist(pts[0], pts[1]);
+    pinchStartScale = zoomScale;
+  }
+});
+
+// A pinch/drag gesture shouldn't also register as a region-select click.
+bboxSvgEl.addEventListener('click', e => {
+  if (didDrag) { e.stopPropagation(); e.preventDefault(); }
+}, true);
+
+window.addEventListener('resize', () => { clampPan(); applyTransform(); });
 
 // ── Region selection ───────────────────────────────────────────────────────────
 
