@@ -581,11 +581,14 @@ function applyTransform() {
   imageContainerEl.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomScale})`;
 }
 
+// Allows panning past the page's edges — up to where the image is dragged
+// fully clear of the panel — so a corner can be pinch-zoomed the same way the
+// center can, instead of snapping back the moment the edge reaches the panel border.
 function clampPan() {
   const scaledW = imageContainerEl.offsetWidth  * zoomScale;
   const scaledH = imageContainerEl.offsetHeight * zoomScale;
-  const maxPanX = Math.max(0, (scaledW - imagePanelEl.clientWidth)  / 2);
-  const maxPanY = Math.max(0, (scaledH - imagePanelEl.clientHeight) / 2);
+  const maxPanX = scaledW  / 2 + imagePanelEl.clientWidth  / 2;
+  const maxPanY = scaledH / 2 + imagePanelEl.clientHeight / 2;
   panX = Math.min(maxPanX, Math.max(-maxPanX, panX));
   panY = Math.min(maxPanY, Math.max(-maxPanY, panY));
 }
