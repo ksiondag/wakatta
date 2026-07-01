@@ -75,6 +75,9 @@ input:focus { outline: none; border-color: #7070cc; }
 #edit-mode-btn.active { background: #4a2a2a; border-color: #6a4a4a; color: #e09090; }
 #edit-mode-btn.active:hover { background: #5a3434; }
 
+#toggle-boxes-btn { font-size: 0.85rem; padding: 5px 12px; }
+#toggle-boxes-btn.hidden-state { opacity: 0.6; }
+
 .page-nav {
   display: flex;
   align-items: center;
@@ -227,6 +230,7 @@ input:focus { outline: none; border-color: #7070cc; }
       <a id="back-btn" href="/page-reader">← Library</a>
       <span id="reader-work-title"></span>
       <span id="sync-status"></span>
+      <button id="toggle-boxes-btn" title="Show/hide bounding boxes">👁 Boxes</button>
       <button id="edit-mode-btn" title="Draw new boxes / move &amp; resize existing ones (disables pan &amp; zoom)">▭ Edit Boxes</button>
       <div class="page-nav">
         <button id="prev-page">◀</button>
@@ -349,6 +353,7 @@ const hwEmptyEl      = document.getElementById('hw-empty');
 
 const syncStatusEl     = document.getElementById('sync-status');
 const editModeBtnEl    = document.getElementById('edit-mode-btn');
+const toggleBoxesBtnEl = document.getElementById('toggle-boxes-btn');
 const ocrLabelEl       = document.getElementById('ocr-label');
 const directionToggleEl = document.getElementById('direction-toggle');
 
@@ -717,6 +722,25 @@ editModeBtnEl.addEventListener('click', () => {
   editModeBtnEl.textContent = editMode ? '✓ Editing Boxes' : '▭ Edit Boxes';
   imageContainerEl.classList.toggle('edit-mode', editMode);
   imageContainerEl.style.cursor = editMode ? 'crosshair' : 'grab';
+  toggleBoxesBtnEl.disabled = editMode; // editing needs the boxes visible
+  applyBoxesVisibility();
+});
+
+// ── Show/hide bounding boxes ────────────────────────────────────────────────────
+// A reading-convenience toggle, separate from edit mode — always shown while
+// editing regardless of this preference, since you need to see what you're editing.
+
+let boxesVisible = true;
+
+function applyBoxesVisibility() {
+  bboxSvgEl.style.display = (boxesVisible || editMode) ? '' : 'none';
+}
+
+toggleBoxesBtnEl.addEventListener('click', () => {
+  boxesVisible = !boxesVisible;
+  toggleBoxesBtnEl.classList.toggle('hidden-state', !boxesVisible);
+  toggleBoxesBtnEl.textContent = boxesVisible ? '👁 Boxes' : '🙈 Boxes';
+  applyBoxesVisibility();
 });
 
 function clientToSvg(clientX, clientY) {
