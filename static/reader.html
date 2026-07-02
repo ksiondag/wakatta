@@ -172,6 +172,31 @@ input:focus { outline: none; border-color: #7070cc; }
 #direction-toggle { padding: 3px 8px; font-size: 0.75rem; }
 #ocr-text { font-size: 1.1rem; color: #777; min-height: 1.4em; letter-spacing: 0.08em; word-break: break-all; }
 
+.tokenized-text { font-size: 1.15rem; line-height: 1.9; letter-spacing: 0.05em; min-height: 1.4em; word-break: break-all; }
+.word-tok { cursor: pointer; padding: 1px 2px; border-radius: 3px; }
+.word-tok:hover { background: rgba(120,150,255,0.25); }
+.word-tok.active { background: rgba(120,150,255,0.45); }
+.word-tok.unresolved { border-bottom: 1px dashed #a08840; }
+.word-tok.selected { background: rgba(220,140,60,0.35); }
+
+#fix-words-btn { padding: 3px 8px; font-size: 0.75rem; }
+#fix-words-btn.active { background: #4a3a2a; border-color: #6a5a4a; color: #e0b090; }
+
+.fix-words-bar {
+  display: flex; align-items: center; gap: 10px; padding: 6px 0;
+  font-size: 0.85rem; color: #ccc;
+}
+.fix-words-bar button { padding: 4px 10px; font-size: 0.8rem; }
+
+.fix-words-editor { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; }
+#fix-words-input {
+  font-size: 1.1rem; letter-spacing: 0.05em; padding: 6px 8px;
+  background: #0d0d1a; border: 1px solid #555; border-radius: 5px; color: #e8e8ff;
+}
+.fix-words-reading-row { display: flex; align-items: center; gap: 8px; }
+#fix-words-reading { flex: 1; padding: 4px 8px; background: #0d0d1a; border: 1px solid #555; border-radius: 5px; color: #ddd; }
+#fix-words-status { font-size: 0.78rem; color: #888; }
+
 .user-text-row { display: flex; gap: 6px; align-items: center; }
 #user-text {
   flex: 1; padding: 6px 8px;
@@ -214,6 +239,39 @@ input:focus { outline: none; border-color: #7070cc; }
 .candidate-score { font-size: 0.6rem; color: #666; }
 
 #hw-empty { padding: 24px 14px; color: #555; text-align: center; font-size: 0.9rem; line-height: 1.6; }
+
+/* ── Dictionary popover ── */
+.dict-popover {
+  position: fixed; width: 320px; max-height: 60vh; overflow-y: auto;
+  background: #20203a; border: 1px solid #555; border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5); z-index: 50; padding: 10px 12px;
+}
+.dict-popover-header { display: flex; align-items: center; justify-content: space-between; }
+.dict-popover-tabs { display: flex; gap: 6px; }
+.dict-tab {
+  padding: 4px 10px; font-size: 0.8rem; border: 1px solid #444; border-radius: 5px;
+  background: #2a2a3e; color: #ddd; cursor: pointer;
+}
+.dict-tab:hover { background: #3a3a5e; }
+.dict-tab.active { background: #3a3a7a; border-color: #8888ff; }
+.dict-tab.disabled { opacity: 0.4; cursor: default; }
+.dict-popover-close { border: none; background: none; color: #888; cursor: pointer; font-size: 1rem; padding: 2px 4px; }
+.dict-popover-word { font-size: 1.3rem; margin: 8px 0; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.dict-popover-reading { color: #999; font-size: 0.95rem; }
+.dict-sense { margin: 6px 0; font-size: 0.85rem; line-height: 1.4; }
+.dict-pos { color: #8888ff; font-size: 0.75rem; margin-right: 6px; }
+.dict-pitch { color: #999; font-size: 0.8rem; margin-bottom: 8px; }
+.dict-empty, .dict-loading { color: #666; font-size: 0.85rem; padding: 8px 0; }
+.dict-candidate {
+  padding: 6px 8px; margin: 4px 0; border: 1px solid #444; border-radius: 5px;
+  background: #262640; cursor: pointer;
+}
+.dict-candidate:hover { background: #32325a; border-color: #7070cc; }
+.dict-candidate.chosen { border-color: #8888ff; background: #2f2f5a; }
+.dict-candidate-head { font-size: 1rem; }
+.dict-candidate-kana { color: #999; font-size: 0.85rem; margin-left: 6px; }
+.dict-other-meanings { margin-top: 8px; padding-top: 8px; border-top: 1px solid #333; }
+.dict-other-meanings-label { color: #777; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
 
 @media (max-width: 700px) {
   .reader-main { flex-direction: column; }
@@ -263,6 +321,29 @@ input:focus { outline: none; border-color: #7070cc; }
             <button id="direction-toggle" title="Toggle vertical/horizontal text direction">↕ v</button>
           </div>
           <div id="ocr-text">—</div>
+          <div class="region-info-header">
+            <div class="label">Words (click for dictionary)</div>
+            <button id="fix-words-btn" title="Select words to merge or split">✎ Fix</button>
+          </div>
+          <div id="tokenized-text" class="tokenized-text">—</div>
+          <div id="fix-words-bar" class="fix-words-bar" hidden>
+            <span id="fix-words-count"></span>
+            <button id="fix-words-confirm">Fix segmentation →</button>
+            <button id="fix-words-cancel">Cancel</button>
+          </div>
+          <div id="fix-words-editor" class="fix-words-editor" hidden>
+            <div class="label">Edit word boundaries (space = word break)</div>
+            <input id="fix-words-input" type="text">
+            <div id="fix-words-reading-row" class="fix-words-reading-row" hidden>
+              <span class="label">Reading (optional)</span>
+              <input id="fix-words-reading" type="text" placeholder="e.g. なうしか">
+            </div>
+            <div class="save-row">
+              <button id="fix-words-save">Save</button>
+              <button id="fix-words-editor-cancel">Cancel</button>
+              <span id="fix-words-status"></span>
+            </div>
+          </div>
           <div class="label">Your text</div>
           <div class="user-text-row">
             <input id="user-text" type="text" placeholder="Confirm characters below…">
@@ -288,6 +369,17 @@ input:focus { outline: none; border-color: #7070cc; }
 
         <div id="candidates"></div>
         <div id="hw-empty">← Select a bounding box to start transcribing</div>
+
+        <div id="dict-popover" class="dict-popover" hidden>
+          <div class="dict-popover-header">
+            <div class="dict-popover-tabs" id="dict-popover-tabs"></div>
+            <button class="dict-popover-close" id="dict-popover-close" title="Close">✕</button>
+          </div>
+          <div class="dict-popover-word" id="dict-popover-word">
+            <span id="dict-popover-surface"></span><span class="dict-popover-reading" id="dict-popover-reading"></span>
+          </div>
+          <div class="dict-popover-body" id="dict-popover-body"></div>
+        </div>
 
       </div>
     </div>
@@ -339,6 +431,19 @@ const prevRegBtnEl   = document.getElementById('prev-region');
 const nextRegBtnEl   = document.getElementById('next-region');
 const regionInfoEl   = document.getElementById('region-info');
 const ocrTextEl      = document.getElementById('ocr-text');
+const tokenizedTextEl = document.getElementById('tokenized-text');
+const fixWordsBtnEl      = document.getElementById('fix-words-btn');
+const fixWordsBarEl      = document.getElementById('fix-words-bar');
+const fixWordsCountEl    = document.getElementById('fix-words-count');
+const fixWordsConfirmEl  = document.getElementById('fix-words-confirm');
+const fixWordsCancelEl   = document.getElementById('fix-words-cancel');
+const fixWordsEditorEl   = document.getElementById('fix-words-editor');
+const fixWordsInputEl    = document.getElementById('fix-words-input');
+const fixWordsReadingRowEl = document.getElementById('fix-words-reading-row');
+const fixWordsReadingEl  = document.getElementById('fix-words-reading');
+const fixWordsSaveEl     = document.getElementById('fix-words-save');
+const fixWordsEditorCancelEl = document.getElementById('fix-words-editor-cancel');
+const fixWordsStatusEl   = document.getElementById('fix-words-status');
 const userTextEl     = document.getElementById('user-text');
 const undoBtnEl      = document.getElementById('undo-char');
 const saveBtnEl      = document.getElementById('save-btn');
@@ -356,6 +461,13 @@ const editModeBtnEl    = document.getElementById('edit-mode-btn');
 const toggleBoxesBtnEl = document.getElementById('toggle-boxes-btn');
 const ocrLabelEl       = document.getElementById('ocr-label');
 const directionToggleEl = document.getElementById('direction-toggle');
+
+const dictPopoverEl        = document.getElementById('dict-popover');
+const dictPopoverTabsEl    = document.getElementById('dict-popover-tabs');
+const dictPopoverCloseEl   = document.getElementById('dict-popover-close');
+const dictPopoverSurfaceEl = document.getElementById('dict-popover-surface');
+const dictPopoverReadingEl = document.getElementById('dict-popover-reading');
+const dictPopoverBodyEl    = document.getElementById('dict-popover-body');
 
 // ── Offline bbox edit queue ─────────────────────────────────────────────────────
 // Custom boxes (and edits to existing ones) are queued locally first, since OCR
@@ -509,6 +621,7 @@ async function navigateTo(idx) {
   const res = await fetch(`/api/pages/${pageRecord.id}`);
   pageData  = await res.json();
   activeIdx = null;
+  closeDictPopover();
 
   // Overlay any not-yet-synced local edits/creates/deletes on top of the server's data.
   sentences = pageData.sentences
@@ -926,6 +1039,7 @@ function selectRegion(idx) {
   hwEmptyEl.style.display = 'none';
   ocrLabelEl.textContent = s.pending ? 'OCR (awaiting sync)' : 'OCR (auto-detected)';
   ocrTextEl.textContent = s.ocr_text ?? '—';
+  renderTokenizedText(s.id ?? null);
   userTextEl.value = s.user_text ?? '';
   directionToggleEl.textContent = s.direction === 'v' ? '↕ v' : '↔ h';
   saveStatEl.textContent = '';
@@ -935,6 +1049,320 @@ function selectRegion(idx) {
 
 prevRegBtnEl.addEventListener('click', () => { if (activeIdx > 0) selectRegion(activeIdx - 1); });
 nextRegBtnEl.addEventListener('click', () => { if (activeIdx < sentences.length - 1) selectRegion(activeIdx + 1); });
+
+// ── Dictionary lookup ────────────────────────────────────────────────────────────
+// Extensible panel descriptor array — a future Kanji panel (reusing kwDb, already
+// loaded client-side for handwriting recognition) is added by appending one more
+// object here; nothing else in this section needs to change.
+
+function renderCandidate(c, tok, isChosen) {
+  const pitch = c.pitch_accents && c.pitch_accents.length
+    ? `<div class="dict-pitch">${c.pitch_accents.map(p => `[${p}]`).join(' ')}</div>` : '';
+  const senses = c.senses.slice(0, 6).map(s =>
+    `<div class="dict-sense"><span class="dict-pos">${(s.pos || []).join(', ')}</span>${(s.glosses || []).join('; ')}</div>`
+  ).join('');
+  const el = document.createElement('div');
+  el.className = 'dict-candidate' + (isChosen ? ' chosen' : '');
+  el.innerHTML = `<div class="dict-candidate-head">${c.kanji_forms[0] || c.kana_forms[0] || ''}` +
+    `<span class="dict-candidate-kana">${c.kana_forms.join('、')}</span></div>${pitch}${senses}`;
+  el.addEventListener('click', () => resolveOccurrence(tok, c.entry_id));
+  return el;
+}
+
+const dictPanels = [
+  {
+    id: 'en', label: 'English',
+    async fetch(tok) {
+      // Intentionally NOT narrowed to tok.lemma_reading — the tokenizer's guessed
+      // reading can be wrong (e.g. 風 analyzed as ふう when かぜ was meant), so the
+      // picker always shows every reading/entry for this surface; `reading` here
+      // only affects sort order (best-guess match listed first), never filtering.
+      const q = new URLSearchParams({ lemma: tok.lemma, surface: tok.surface, reading: tok.lemma_reading });
+      const res = await fetch(`/api/dict/lookup?${q}`);
+      return res.ok ? res.json() : null;
+    },
+    render(data, tok) {
+      if (!data) return '<div class="dict-empty">Dictionary unavailable.</div>';
+      const container = document.createElement('div');
+
+      if (!data.candidates.length) {
+        container.innerHTML += '<div class="dict-empty">No dictionary entry found.</div>';
+        return container;
+      }
+
+      const chosen = data.candidates.find(c => c.entry_id === tok.dict_entry_id);
+      if (chosen) {
+        container.appendChild(renderCandidate(chosen, tok, true));
+        const others = data.candidates.filter(c => c.entry_id !== tok.dict_entry_id);
+        if (others.length) {
+          const wrap = document.createElement('div');
+          wrap.className = 'dict-other-meanings';
+          wrap.innerHTML = '<div class="dict-other-meanings-label">Other meanings</div>';
+          others.forEach(c => wrap.appendChild(renderCandidate(c, tok, false)));
+          container.appendChild(wrap);
+        }
+      } else {
+        const label = document.createElement('div');
+        label.className = 'dict-other-meanings-label';
+        label.textContent = data.candidates.length > 1 ? 'Multiple meanings — pick one' : 'Pick this meaning';
+        container.appendChild(label);
+        data.candidates.forEach(c => container.appendChild(renderCandidate(c, tok, false)));
+      }
+      return container;
+    },
+  },
+  {
+    id: 'jj', label: '日本語', disabled: true,
+    async fetch() { return null; },
+    render() { return '<div class="dict-empty">Japanese-Japanese definitions — coming soon.</div>'; },
+  },
+  // future: { id: 'kanji', label: 'Kanji', fetch(tok) {...}, render(data, tok) {...} }
+];
+
+let currentSentenceId = null;
+
+async function renderTokenizedText(sentenceId) {
+  closeDictPopover();
+  cancelFixSelection();
+  currentSentenceId = sentenceId;
+  tokenizedTextEl.innerHTML = '';
+  if (!sentenceId) {
+    tokenizedTextEl.textContent = '(save this box to enable word lookup)';
+    return;
+  }
+  let data;
+  try {
+    const res = await fetch(`/api/sentences/${sentenceId}/tokens`);
+    if (!res.ok) throw new Error('tokens fetch failed');
+    data = await res.json();
+  } catch {
+    tokenizedTextEl.textContent = '—';
+    return;
+  }
+  if (!data.tokens.length) { tokenizedTextEl.textContent = '—'; return; }
+  data.tokens.forEach(tok => {
+    const span = document.createElement('span');
+    span.className = 'word-tok' + (tok.dict_entry_id === null && tok.candidate_count > 1 ? ' unresolved' : '');
+    span.textContent = tok.surface;
+    span.dataset.occId = tok.id;
+    span.addEventListener('click', () => {
+      if (fixMode) toggleFixSelection(tok, span);
+      else openDictPopover(tok, span, sentenceId);
+    });
+    tokenizedTextEl.appendChild(span);
+  });
+}
+
+// ── Fix segmentation ─────────────────────────────────────────────────────────────
+// Corrections are registered globally (POST /api/segmentation-overrides), not just for
+// this one sentence — a recurring word like a character's name would otherwise need
+// the same fix reapplied every time it appears throughout the work. The server
+// retroactively re-tokenizes every existing sentence containing the corrected span.
+
+let fixMode = false;
+let fixSelection = [];       // token objects, click order
+let fixSelectionSorted = []; // same tokens, sorted by position, set once the editor opens
+
+fixWordsBtnEl.addEventListener('click', () => {
+  fixMode = !fixMode;
+  fixWordsBtnEl.classList.toggle('active', fixMode);
+  fixWordsBtnEl.textContent = fixMode ? '✓ Selecting' : '✎ Fix';
+  if (!fixMode) cancelFixSelection();
+  closeDictPopover();
+});
+
+function toggleFixSelection(tok, span) {
+  const idx = fixSelection.findIndex(t => t.id === tok.id);
+  if (idx !== -1) {
+    fixSelection.splice(idx, 1);
+    span.classList.remove('selected');
+  } else {
+    fixSelection.push(tok);
+    span.classList.add('selected');
+  }
+  fixWordsBarEl.hidden = !fixSelection.length;
+  if (fixSelection.length) {
+    fixWordsCountEl.textContent = `${fixSelection.length} word${fixSelection.length !== 1 ? 's' : ''} selected`;
+  }
+}
+
+function cancelFixSelection() {
+  fixSelection = [];
+  fixWordsBarEl.hidden = true;
+  fixWordsEditorEl.hidden = true;
+  document.querySelectorAll('.word-tok.selected').forEach(el => el.classList.remove('selected'));
+}
+
+fixWordsCancelEl.addEventListener('click', cancelFixSelection);
+
+fixWordsConfirmEl.addEventListener('click', () => {
+  const sorted = [...fixSelection].sort((a, b) => a.start - b.start);
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i].start !== sorted[i - 1].end) {
+      fixWordsCountEl.textContent = 'Selected words must be adjacent (no gaps) — deselect and try again.';
+      return;
+    }
+  }
+  fixSelectionSorted = sorted;
+  fixWordsInputEl.value = sorted.map(t => t.surface).join(' ');
+  fixWordsReadingEl.value = '';
+  fixWordsBarEl.hidden = true;
+  fixWordsEditorEl.hidden = false;
+  fixWordsStatusEl.textContent = '';
+  updateFixReadingVisibility();
+  fixWordsInputEl.focus();
+  fixWordsInputEl.select();
+});
+
+// The reading field only matters for a single merged word (Unidic can't supply a
+// reading for an atomic token it doesn't recognize) — prefilled from the selected
+// tokens' own readings concatenated, which is already correct for pure kana spans
+// (a name written in katakana IS its own phonetic reading) and a reasonable starting
+// guess otherwise.
+function updateFixReadingVisibility() {
+  const words = fixWordsInputEl.value.trim().split(/\s+/).filter(Boolean);
+  fixWordsReadingRowEl.hidden = words.length !== 1;
+  if (words.length === 1 && !fixWordsReadingEl.value) {
+    fixWordsReadingEl.value = fixSelectionSorted.map(t => t.lemma_reading).join('');
+  }
+}
+fixWordsInputEl.addEventListener('input', updateFixReadingVisibility);
+
+fixWordsEditorCancelEl.addEventListener('click', () => {
+  fixWordsEditorEl.hidden = true;
+  cancelFixSelection();
+});
+
+fixWordsSaveEl.addEventListener('click', async () => {
+  const spanText = fixSelectionSorted.map(t => t.surface).join('');
+  const words = fixWordsInputEl.value.trim().split(/\s+/).filter(Boolean);
+  if (!words.length || words.join('') !== spanText) {
+    fixWordsStatusEl.textContent = `Words must combine back to exactly: ${spanText}`;
+    return;
+  }
+  fixWordsStatusEl.textContent = 'Saving…';
+  const reading = words.length === 1 ? (fixWordsReadingEl.value.trim() || null) : null;
+  try {
+    const res = await fetch('/api/segmentation-overrides', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ span_text: spanText, words, reading }),
+    });
+    if (!res.ok) throw new Error();
+  } catch {
+    fixWordsStatusEl.textContent = 'Failed to save.';
+    return;
+  }
+  fixWordsEditorEl.hidden = true;
+  cancelFixSelection();
+  fixMode = false;
+  fixWordsBtnEl.classList.remove('active');
+  fixWordsBtnEl.textContent = '✎ Fix';
+  renderTokenizedText(currentSentenceId);
+});
+
+function logWordLookup(occurrenceId) {
+  if (logWordLookup._last === occurrenceId) return; // de-dupe rapid double-fires per click
+  logWordLookup._last = occurrenceId;
+  fetch('/api/word-lookups', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ occurrence_id: occurrenceId }),
+  }).catch(() => {}); // fire-and-forget: a lost log entry isn't worth an offline retry queue
+}
+
+let dictPopoverAnchor = null;
+let dictPopoverActiveTab = null;
+let dictPopoverCache = null;
+let dictPopoverTok = null;
+
+function openDictPopover(tok, anchorEl, sentenceId) {
+  if (dictPopoverAnchor === anchorEl) { closeDictPopover(); return; } // re-click same word toggles closed
+  logWordLookup(tok.id);
+  document.querySelectorAll('.word-tok.active').forEach(el => el.classList.remove('active'));
+  anchorEl.classList.add('active');
+  dictPopoverAnchor = anchorEl;
+  dictPopoverTok = tok;
+  dictPopoverCache = new Map();
+  dictPopoverActiveTab = dictPanels.find(p => !p.disabled)?.id;
+
+  dictPopoverSurfaceEl.textContent = tok.lemma !== tok.surface ? `${tok.surface} (${tok.lemma})` : tok.surface;
+  dictPopoverReadingEl.textContent = tok.lemma_reading ? `「${tok.lemma_reading}」` : '';
+
+  dictPopoverTabsEl.innerHTML = '';
+  dictPanels.forEach(p => {
+    const tab = document.createElement('button');
+    tab.className = 'dict-tab' + (p.disabled ? ' disabled' : '');
+    tab.textContent = p.label;
+    tab.dataset.id = p.id;
+    if (!p.disabled) tab.addEventListener('click', () => showDictPanel(p.id));
+    dictPopoverTabsEl.appendChild(tab);
+  });
+  showDictPanel(dictPopoverActiveTab);
+
+  positionPopover(anchorEl);
+  dictPopoverEl.hidden = false;
+}
+
+function showDictPanel(id) {
+  dictPopoverActiveTab = id;
+  dictPopoverTabsEl.querySelectorAll('.dict-tab').forEach(t => t.classList.toggle('active', t.dataset.id === id));
+  const panel = dictPanels.find(p => p.id === id);
+  const tok = dictPopoverTok;
+  if (panel.disabled) { dictPopoverBodyEl.innerHTML = panel.render(); return; }
+  if (dictPopoverCache.has(id)) {
+    renderDictPanelBody(panel, dictPopoverCache.get(id), tok);
+    return;
+  }
+  dictPopoverBodyEl.innerHTML = '<div class="dict-loading">Loading…</div>';
+  panel.fetch(tok).then(data => {
+    dictPopoverCache.set(id, data);
+    if (dictPopoverActiveTab === id) renderDictPanelBody(panel, data, tok);
+  });
+}
+
+function renderDictPanelBody(panel, data, tok) {
+  const rendered = panel.render(data, tok);
+  dictPopoverBodyEl.innerHTML = '';
+  if (typeof rendered === 'string') dictPopoverBodyEl.innerHTML = rendered;
+  else dictPopoverBodyEl.appendChild(rendered);
+}
+
+async function resolveOccurrence(tok, dictEntryId) {
+  const res = await fetch(`/api/word-occurrences/${tok.id}/resolve`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dict_entry_id: dictEntryId }),
+  });
+  if (!res.ok) return;
+  const updated = await res.json();
+  Object.assign(tok, updated);
+  if (dictPopoverAnchor) dictPopoverAnchor.classList.remove('unresolved');
+  dictPopoverCache.delete('en');
+  showDictPanel('en');
+}
+
+function positionPopover(anchorEl) {
+  const r = anchorEl.getBoundingClientRect();
+  const W = 320, pad = 8;
+  const left = Math.min(Math.max(pad, r.left), window.innerWidth - W - pad);
+  let top = r.bottom + 6;
+  if (top + 240 > window.innerHeight) top = Math.max(pad, r.top - 246); // flip above if no room below
+  dictPopoverEl.style.left = `${left}px`;
+  dictPopoverEl.style.top = `${top}px`;
+}
+
+function closeDictPopover() {
+  dictPopoverEl.hidden = true;
+  if (dictPopoverAnchor) dictPopoverAnchor.classList.remove('active');
+  dictPopoverAnchor = null;
+  dictPopoverTok = null;
+}
+
+document.addEventListener('click', e => {
+  if (dictPopoverEl.hidden) return;
+  if (dictPopoverEl.contains(e.target) || e.target.classList.contains('word-tok')) return;
+  closeDictPopover();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDictPopover(); });
+dictPopoverCloseEl.addEventListener('click', closeDictPopover);
 
 // ── Save region text ───────────────────────────────────────────────────────────
 
@@ -956,6 +1384,7 @@ deleteBtnEl.addEventListener('click', () => {
   if (!confirm('Delete this bounding box? This cannot be undone.')) return;
   const idx = activeIdx;
   activeIdx = null;
+  closeDictPopover();
   deleteSentence(idx);
   regionInfoEl.style.display = 'none';
   hwEmptyEl.style.display = 'block';

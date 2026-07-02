@@ -15,6 +15,7 @@ Initial target: **Nausicaä of the Valley of the Wind** (manga).
 | OCR | `manga-ocr` (ViT-based, CUDA-accelerated) |
 | Text region detection | Custom CTD inference (`ctd.py`) using `comictextdetector.pt.onnx` |
 | Tokenization | `fugashi` + MeCab (Unidic) |
+| Dictionary | JMdict (`jmdict-simplified`, English) + Kanjium pitch accents — `dictionary.py`, `data/wakatta.db` |
 | Database | SQLite + SQLAlchemy |
 | Backend API | FastAPI + uvicorn |
 | Frontend | HTML5 Canvas (PWA target) |
@@ -49,8 +50,43 @@ Primary machine: 4090 GPU, Arch Linux. Also runs on Framework 12 (CPU-only, slow
   wheel/drag pans. Default view (and the "⤢ Fit" button) fits the whole page in the panel.
   Click a region to select it; right panel shows
   auto-OCR text as reference. Draw on the handwriting canvas → recognition candidates → click
-  to confirm; auto-saves to SQLite.
+  to confirm; auto-saves to SQLite. Below the OCR text, a "Words" row shows the sentence's
+  confirmed text as clickable, tokenized spans — see Dictionary Lookup below.
 - SQLite (`data/wakatta.db`) stores Work → Page → Sentence; uploaded PDFs saved to `data/uploads/`
+
+### Dictionary Lookup (`dictionary.py` + `static/reader.html`)
+- JMdict (`jmdict-simplified`, English glosses) and Kanjium pitch-accent data imported once
+  into `data/wakatta.db` at first server start (`dictionary.build_db()`) — raw-SQL tables
+  (`dict_entries`/`dict_index`/`pitch_accents`), decoupled from the app's ORM models since
+  they're bulk-imported read-only reference data
+- Every time a `Sentence`'s `ocr_text` or `user_text` is written, it's tokenized
+  (`fugashi`/Unidic) and persisted as `WordOccurrence` rows — one set per text *source*
+  (`ocr` vs `user`), tracked independently as different trust levels, dedicated to a
+  canonical `Word` (deduplicated by dictionary form). `GET /api/sentences/{id}/tokens` is a
+  pure read of this persisted data — nothing is tokenized live
+  when the reader is opened, and no dictionary data is fetched until a word is clicked
+- Clicking a word opens a tabbed popover (`GET /api/dict/lookup`): kana reading + pitch-accent
+  pattern, English glosses in the "English" tab, a disabled "日本語" (JJ) tab placeholder for
+  a future Japanese-Japanese source. Every panel-open is logged to `word_lookups`
+  (`POST /api/word-lookups`) as a "didn't know this word" signal
+- **Per-occurrence definition resolution**: unambiguous words auto-resolve at write time;
+  genuine homographs (multiple JMdict entries sharing a surface/reading, e.g. 変/へん =
+  "strange" or "change") are left unresolved and shown as a picker. Resolution is per
+  *occurrence*, not per canonical word, since the same lemma+reading can mean different
+  things in different sentences — and since Unidic's own reading guess can simply be wrong
+  (e.g. 風 analyzed as ふう "style" when かぜ "wind" was meant), the picker always shows
+  every JMdict entry for the surface form, across every reading, not just the guessed one
+  (`POST /api/word-occurrences/{id}/resolve`)
+- **Segmentation corrections**: Unidic sometimes splits a real word into pieces (a
+  character's name like ナウシカ → ナウ + シカ) or fuses separate words together. The
+  reader's "✎ Fix" mode lets the user select a run of adjacent words and re-specify the
+  correct boundaries; saved as a global `SegmentationOverride` keyed by the literal text
+  span (`POST /api/segmentation-overrides`) and applied in `dictionary.tokenize()` on top of
+  Unidic's analysis, so it's fixed for every future occurrence of that text — the fix is
+  also applied retroactively to every existing sentence containing the corrected span
+- The panel/tab system is a small descriptor array in `reader.html` (`dictPanels`) — a
+  future Kanji panel (radicals/stroke order, reusing `kanjivg_db.py`) is one more entry,
+  no redesign needed
 
 ### Handwriting Recognition Webapp (`server.py` + `static/index.html`)
 - FastAPI server loads KanjiVG stroke database on startup, generates `static/db.json`
@@ -101,8 +137,13 @@ uv sync
 #    Slow on first run (parallelised SVG parsing); fast on subsequent runs via cache
 uv run setup_kanjivg.py
 
-# 3. Start the server
-#    On first start, downloads manga-ocr weights (~444 MB) and the CTD ONNX model (~50 MB)
+# 3. Download dictionary data (JMdict English + Kanjium pitch accents)
+uv run setup_jmdict.py
+uv run setup_pitch_accents.py
+
+# 4. Start the server
+#    On first start, downloads manga-ocr weights (~444 MB) and the CTD ONNX model (~50 MB),
+#    and imports JMdict (~220k entries) into data/wakatta.db (~20s, one-time)
 uv run uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
@@ -131,13 +172,23 @@ After the initial setup and at least one server start, set `HF_HUB_OFFLINE=1` to
 Work                              ← implemented
   └── Page (one image/PDF page)  ← implemented
         └── Sentence (text region / speech bubble)  ← implemented
-              └── WordOccurrence (token position on page)
-                    └── Word (canonical entry, deduplicated by dictionary form)
-                          ├── reading (hiragana pronunciation)
-                          ├── pitch accent
-                          └── KanjiComponent (per kanji in the word)
+              └── WordOccurrence (one per token, per text source: ocr | user)  ← implemented
+                    ├── WordLookup (logged on each dictionary panel-open —        ← implemented
+                    │     "didn't know this word" signal)
+                    ├── dict_entry_id (resolved JMdict sense — auto if           ← implemented
+                    │     unambiguous, else user-picked; per-occurrence, not
+                    │     per-word, since homographs can differ by sentence)
+                    └── Word (canonical entry, deduplicated by lemma+reading)     ← implemented
+                          └── KanjiComponent (per kanji in the word)              [not yet implemented]
                                 ├── radicals (from KANJIDIC2/KRADFILE)
                                 └── stroke order (from KanjiVG)
+
+DictEntry / PitchAccent          ← implemented (raw-SQL reference tables in data/wakatta.db,
+                                     bulk-imported from JMdict + Kanjium; joined to
+                                     WordOccurrence by id/surface string, no formal FK — see
+                                     dictionary.py)
+SegmentationOverride              ← implemented (user-defined tokenizer corrections, keyed by
+                                     literal text span — see dictionary.py's tokenize())
 ```
 
 ---
@@ -171,8 +222,8 @@ Work                              ← implemented
 - [x] **Whole-PDF ingestion** — `POST /api/works/{id}/process-all` queues all pages as a
       background job; client polls `GET /api/jobs/{id}` for progress
 - [x] **Job persistence** — job state stored in SQLite; interrupted jobs resume on server restart
-- [ ] **Word layer** — run `fugashi` tokenization on confirmed `user_text`; populate
-      Word/WordOccurrence tables
+- [x] **Word layer** — `fugashi` tokenization runs whenever `ocr_text`/`user_text` is written,
+      populating `WordOccurrence`/`Word`; see Dictionary Lookup above
 - [ ] **Study deck** — connect ingested words to FSRS review cards
 
 ### Offline & Sync
@@ -191,7 +242,31 @@ Work                              ← implemented
 - [x] **Page transcription UI** — page reader with SVG bbox overlay; click a region to
       transcribe its text via handwriting input when OCR fails or is wrong
 - [ ] **Bounding box editing** — add, move, and resize detected regions directly on the page image
-- [ ] **Pitch accent** — add OJAD or accent dictionary lookup to word analysis
+- [x] **Pitch accent** — Kanjium dataset imported via `dictionary.py`; shown per-candidate in
+      the dictionary popover as raw pattern number(s) (e.g. `[0]`, `[1,3]`) — see "Dictionary —
+      Deferred" below for the richer visual version
+
+### Dictionary — Deferred
+- [ ] **Japanese-Japanese (JJ) definitions** — JMdict's own glosses are English-only; the
+      reader already has a disabled "日本語" tab slot in `dictPanels` (`reader.html`) ready to
+      wire up once a JJ-capable source is chosen (e.g. a parsed Japanese Wiktionary dump)
+- [ ] **Rich pitch-accent rendering** — currently raw pattern numbers; a future version should
+      draw the accent line over/under each mora (heiban/atamadaka/nakadaka/odaka), the
+      convention used by Yomichan/OJAD
+- [ ] **Kanji panel** — reuse `kanjivg_db.py` stroke data (already available client-side via
+      `static/db.json`) plus a new KANJIDIC2 import for radicals; add as one more `dictPanels`
+      descriptor
+- [ ] **Trust-weighted coverage/recommendation** — `WordOccurrence.source` (`ocr` vs `user`)
+      already distinguishes auto-OCR text from human-confirmed text; a future Study Coverage
+      Engine could estimate "likely known words" even on unconfirmed OCR-only pages, trusting
+      confirmed pages more, and recommend works with the most overlap with words already known
+- [ ] **ML-assisted disambiguation** — homograph/reading resolution is currently entirely
+      manual (the user picks via the popover, see Dictionary Lookup above); an ML-assisted
+      default using sentence context is future work
+- [ ] **Retroactive segmentation reapply across works** — `POST /api/segmentation-overrides`
+      already re-tokenizes every sentence *containing* the corrected span; extending this to
+      proactively suggest corrections (e.g. flagging likely-wrong proper-noun splits) is future
+      work
 
 ### Kanji
 - [ ] **KANJIDIC2 integration** — radical breakdown per kanji character

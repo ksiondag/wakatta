@@ -13,6 +13,7 @@ from pathlib import Path
 
 import cv2
 import fitz
+import fugashi
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
@@ -25,6 +26,7 @@ from sqlalchemy import Column, Float, ForeignKey, Integer, String, Text, UniqueC
 from sqlalchemy.orm import DeclarativeBase, Session
 
 import ctd
+import dictionary
 import kanjivg_db
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
@@ -84,6 +86,63 @@ class JobRecord(Base):
     created_at = Column(String, nullable=False)
 
 
+class Word(Base):
+    """Canonical dictionary-form entry, deduplicated by (lemma, reading) — e.g. every
+    occurrence of 勉強/べんきょう across the whole library shares one row."""
+    __tablename__ = "words"
+    id = Column(Integer, primary_key=True)
+    lemma = Column(String, nullable=False)
+    reading = Column(String, nullable=False)
+    __table_args__ = (UniqueConstraint("lemma", "reading"),)
+
+
+class WordOccurrence(Base):
+    """One tokenized instance of a Word in a Sentence, from one text source.
+
+    `source` distinguishes OCR-derived occurrences from human-confirmed ones so a page
+    that hasn't been manually checked yet can still contribute a (lower-trust) signal —
+    a sentence whose ocr_text and user_text disagree ends up with two independent sets
+    of occurrences. Definition resolution (`dict_entry_id`) lives here rather than on
+    Word because the same lemma+reading can be a genuine homograph resolving differently
+    sentence to sentence (e.g. 変/へん = "strange" vs "change").
+    """
+    __tablename__ = "word_occurrences"
+    id = Column(Integer, primary_key=True)
+    sentence_id = Column(Integer, ForeignKey("sentences.id"), nullable=False)
+    word_id = Column(Integer, ForeignKey("words.id"), nullable=False)
+    source = Column(String(4), nullable=False)  # "ocr" | "user"
+    surface = Column(String, nullable=False)
+    start = Column(Integer, nullable=False)  # char offset into that source's text
+    end = Column(Integer, nullable=False)
+    dict_entry_id = Column(Integer, nullable=True)  # soft ref -> dict_entries.id (raw-SQL table, see dictionary.py); NULL = unresolved
+    resolved_by = Column(String, nullable=True)  # "auto" | "user" | None
+    candidate_count = Column(Integer, nullable=False, default=0)  # how many dict_entries matched at tokenize time (0 = no entry at all, >1 = genuinely ambiguous)
+    __table_args__ = (UniqueConstraint("sentence_id", "source", "start", "end"),)
+
+
+class WordLookup(Base):
+    """Logged every time a user opens the dictionary panel for a word occurrence —
+    the lookup itself is treated as a "didn't know this word" signal."""
+    __tablename__ = "word_lookups"
+    id = Column(Integer, primary_key=True)
+    occurrence_id = Column(Integer, ForeignKey("word_occurrences.id"), nullable=False)
+    created_at = Column(String, nullable=False)
+
+
+class SegmentationOverride(Base):
+    """User-defined correction to how the tokenizer splits a piece of text into words —
+    e.g. registering ナウシカ (a character's name Unidic doesn't recognize) as a single
+    atomic word instead of the ナウ + シカ it gets split into, or the reverse: splitting
+    a span the tokenizer wrongly fused into one word. Global (keyed only by the literal
+    text span, not tied to any one sentence) because a recurring word like a character's
+    name would otherwise need the same fix reapplied every time it appears."""
+    __tablename__ = "segmentation_overrides"
+    id = Column(Integer, primary_key=True)
+    span_text = Column(String, nullable=False, unique=True)
+    words_json = Column(Text, nullable=False)  # JSON list of literal substrings span_text divides into
+    reading = Column(String, nullable=True)  # only used when words_json has exactly one entry
+
+
 engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
 
 
@@ -117,6 +176,7 @@ _process_lock: asyncio.Lock = None
 
 kvg_db: kanjivg_db.KanjiVGDatabase = None
 mocr: MangaOcr = None
+tagger: fugashi.Tagger = None
 
 
 # ── Image pipeline helpers ─────────────────────────────────────────────────────
@@ -139,6 +199,60 @@ def crop_region(image: Image.Image, x1: int, y1: int, x2: int, y2: int) -> Image
         max(0, x1 - margin), max(0, y1 - margin),
         min(w, x2 + margin), min(h, y2 + margin),
     ))
+
+
+def _get_or_create_word(session: Session, lemma: str, reading: str) -> Word:
+    word = session.query(Word).filter_by(lemma=lemma, reading=reading).first()
+    if word is None:
+        word = Word(lemma=lemma, reading=reading)
+        session.add(word)
+        session.flush()
+    return word
+
+
+def _store_occurrences(session: Session, sentence_id: int, text_: str | None, source: str) -> None:
+    """(Re)tokenize `text_` and replace this sentence's WordOccurrence rows for `source`.
+    No-op (just clearing stale rows) if there's no text yet or the tagger hasn't loaded."""
+    session.query(WordOccurrence).filter_by(sentence_id=sentence_id, source=source).delete()
+    if not text_ or tagger is None:
+        return
+    overrides = dictionary.load_overrides(engine)
+    for tok in dictionary.tokenize(text_, tagger, overrides=overrides):
+        word = _get_or_create_word(session, tok["lemma"], tok["lemma_reading"])
+        candidates = dictionary.resolve_candidates(
+            engine, lemma=tok["lemma"], surface=tok["surface"], reading=tok["lemma_reading"]
+        )
+        dict_entry_id = candidates[0] if len(candidates) == 1 else None
+        session.add(WordOccurrence(
+            sentence_id=sentence_id,
+            word_id=word.id,
+            source=source,
+            surface=tok["surface"],
+            start=tok["start"],
+            end=tok["end"],
+            dict_entry_id=dict_entry_id,
+            resolved_by="auto" if dict_entry_id is not None else None,
+            candidate_count=len(candidates),
+        ))
+
+
+def _reapply_override_everywhere(session: Session, span_text: str) -> None:
+    """Re-tokenize every existing sentence whose ocr_text or user_text contains
+    `span_text`, so a new segmentation override (e.g. registering a character's name)
+    takes effect retroactively wherever it already appears — not just in whatever
+    sentence prompted the correction. Cheap: fugashi tokenization has no GPU/network
+    cost, and this only touches sentences that actually contain the substring."""
+    like = f"%{span_text}%"
+    rows = (
+        session.query(Sentence)
+        .filter(Sentence.ocr_text.like(like) | Sentence.user_text.like(like))
+        .all()
+    )
+    for s in rows:
+        if s.ocr_text and span_text in s.ocr_text:
+            _store_occurrences(session, s.id, s.ocr_text, "ocr")
+        if s.user_text and span_text in s.user_text:
+            _store_occurrences(session, s.id, s.user_text, "user")
 
 
 async def _ocr_region(page_id: int, x1: int, y1: int, x2: int, y2: int) -> str | None:
@@ -198,13 +312,16 @@ async def _process_one_page(
 
         for region, ocr_text in zip(regions, region_texts):
             x1, y1, x2, y2 = region.xyxy
-            session.add(Sentence(
+            sentence = Sentence(
                 page_id=page.id,
                 x1=x1, y1=y1, x2=x2, y2=y2,
                 direction=region.direction,
                 prob=region.prob,
                 ocr_text=ocr_text,
-            ))
+            )
+            session.add(sentence)
+            session.flush()
+            _store_occurrences(session, sentence.id, ocr_text, "ocr")
 
         session.commit()
 
@@ -271,12 +388,18 @@ def _generate_db_json(database: kanjivg_db.KanjiVGDatabase) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global kvg_db, mocr, _process_lock
+    global kvg_db, mocr, tagger, _process_lock
     _process_lock = asyncio.Lock()
 
     PAGES_DIR.mkdir(parents=True, exist_ok=True)
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
+
+    try:
+        await asyncio.to_thread(dictionary.build_db, engine)
+    except FileNotFoundError as e:
+        print(f"[dictionary] {e}")
+        print("[dictionary] Dictionary lookups will return 503 until the setup scripts are run.")
 
     kvg_db = await asyncio.to_thread(kanjivg_db.load_database)
     if not DB_JSON_PATH.exists():
@@ -286,6 +409,10 @@ async def lifespan(app: FastAPI):
     print("Loading manga-ocr ...")
     mocr = await asyncio.to_thread(MangaOcr)
     print("manga-ocr ready.")
+
+    print("Loading fugashi tokenizer ...")
+    tagger = await asyncio.to_thread(fugashi.Tagger)
+    print("fugashi ready.")
 
     # Resume any jobs that were running when the server last stopped
     with Session(engine) as session:
@@ -354,6 +481,20 @@ class SentenceUpdate(BaseModel):
     direction: str | None = None
 
 
+class WordResolve(BaseModel):
+    dict_entry_id: int
+
+
+class WordLookupCreate(BaseModel):
+    occurrence_id: int
+
+
+class SegmentationOverrideCreate(BaseModel):
+    span_text: str
+    words: list[str]
+    reading: str | None = None
+
+
 # ── Response helpers ───────────────────────────────────────────────────────────
 
 def _work_dict(w: Work) -> dict:
@@ -368,6 +509,20 @@ def _sentence_dict(s: Sentence) -> dict:
         "prob": round(s.prob, 3),
         "ocr_text": s.ocr_text,
         "user_text": s.user_text,
+    }
+
+
+def _occurrence_dict(o: WordOccurrence, word: Word) -> dict:
+    return {
+        "id": o.id,
+        "surface": o.surface,
+        "start": o.start,
+        "end": o.end,
+        "lemma": word.lemma,
+        "lemma_reading": word.reading,
+        "dict_entry_id": o.dict_entry_id,
+        "resolved_by": o.resolved_by,
+        "candidate_count": o.candidate_count,
     }
 
 
@@ -590,6 +745,10 @@ async def create_sentence(page_id: int, req: SentenceCreate):
             user_text=req.user_text,
         )
         session.add(s)
+        session.flush()
+        _store_occurrences(session, s.id, ocr_text, "ocr")
+        if req.user_text:
+            _store_occurrences(session, s.id, req.user_text, "user")
         session.commit()
         session.refresh(s)
         return _sentence_dict(s)
@@ -614,6 +773,7 @@ async def update_sentence(sentence_id: int, update: SentenceUpdate):
             s.direction = update.direction
         if update.user_text is not None:
             s.user_text = update.user_text
+            _store_occurrences(session, sentence_id, s.user_text, "user")
 
         if geometry_changed:
             s.x1, s.y1, s.x2, s.y2 = x1, y1, x2, y2
@@ -626,6 +786,7 @@ async def update_sentence(sentence_id: int, update: SentenceUpdate):
         with Session(engine) as session:
             s = session.get(Sentence, sentence_id)
             s.ocr_text = ocr_text
+            _store_occurrences(session, sentence_id, ocr_text, "ocr")
             session.commit()
             session.refresh(s)
 
@@ -638,5 +799,88 @@ def delete_sentence(sentence_id: int):
         s = session.get(Sentence, sentence_id)
         if s is None:
             raise HTTPException(404, "Sentence not found")
+        occurrence_ids = [
+            oid for (oid,) in session.query(WordOccurrence.id).filter_by(sentence_id=sentence_id).all()
+        ]
+        if occurrence_ids:
+            session.query(WordLookup).filter(WordLookup.occurrence_id.in_(occurrence_ids)).delete(synchronize_session=False)
+            session.query(WordOccurrence).filter_by(sentence_id=sentence_id).delete()
         session.delete(s)
         session.commit()
+
+
+# ── Routes — dictionary ─────────────────────────────────────────────────────────
+
+@app.get("/api/sentences/{sentence_id}/tokens")
+def get_sentence_tokens(sentence_id: int):
+    with Session(engine) as session:
+        s = session.get(Sentence, sentence_id)
+        if s is None:
+            raise HTTPException(404, "Sentence not found")
+        source = "user" if s.user_text else "ocr"
+        rows = (
+            session.query(WordOccurrence, Word)
+            .join(Word, Word.id == WordOccurrence.word_id)
+            .filter(WordOccurrence.sentence_id == sentence_id, WordOccurrence.source == source)
+            .order_by(WordOccurrence.start)
+            .all()
+        )
+        return {"source": source, "tokens": [_occurrence_dict(o, w) for o, w in rows]}
+
+
+@app.get("/api/dict/lookup")
+def dict_lookup(lemma: str | None = None, surface: str | None = None, reading: str | None = None):
+    if not dictionary.is_ready(engine):
+        raise HTTPException(503, "Dictionary data not loaded — run setup_jmdict.py / setup_pitch_accents.py")
+    if not any([lemma, surface, reading]):
+        raise HTTPException(400, "Provide at least one of lemma, surface, reading")
+    return dictionary.lookup(engine, lemma=lemma, surface=surface, reading=reading)
+
+
+@app.post("/api/word-occurrences/{occurrence_id}/resolve")
+def resolve_word_occurrence(occurrence_id: int, req: WordResolve):
+    with Session(engine) as session:
+        occ = session.get(WordOccurrence, occurrence_id)
+        if occ is None:
+            raise HTTPException(404, "Word occurrence not found")
+        word = session.get(Word, occ.word_id)
+        occ.dict_entry_id = req.dict_entry_id
+        occ.resolved_by = "user"
+        session.commit()
+        session.refresh(occ)
+        return _occurrence_dict(occ, word)
+
+
+@app.post("/api/word-lookups", status_code=201)
+def log_word_lookup(req: WordLookupCreate):
+    with Session(engine) as session:
+        if session.get(WordOccurrence, req.occurrence_id) is None:
+            raise HTTPException(404, "Word occurrence not found")
+        session.add(WordLookup(
+            occurrence_id=req.occurrence_id,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ))
+        session.commit()
+    return {"status": "logged"}
+
+
+@app.post("/api/segmentation-overrides", status_code=201)
+def create_segmentation_override(req: SegmentationOverrideCreate):
+    if not req.words or any(not w for w in req.words):
+        raise HTTPException(400, "words must be a non-empty list of non-empty strings")
+    if "".join(req.words) != req.span_text:
+        raise HTTPException(400, "words must concatenate back to exactly span_text")
+
+    with Session(engine) as session:
+        existing = session.query(SegmentationOverride).filter_by(span_text=req.span_text).first()
+        if existing is None:
+            existing = SegmentationOverride(span_text=req.span_text)
+            session.add(existing)
+        existing.words_json = json.dumps(req.words, ensure_ascii=False)
+        existing.reading = req.reading if len(req.words) == 1 else None
+        session.commit()  # commit the override first — load_overrides() reads via a separate connection
+
+        _reapply_override_everywhere(session, req.span_text)
+        session.commit()
+
+    return {"status": "saved"}
