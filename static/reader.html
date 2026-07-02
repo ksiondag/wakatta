@@ -332,10 +332,10 @@ input:focus { outline: none; border-color: #7070cc; }
             <button id="fix-words-cancel">Cancel</button>
           </div>
           <div id="fix-words-editor" class="fix-words-editor" hidden>
-            <div class="label">Edit word boundaries (space = word break)</div>
+            <div class="label">Word boundaries (space = word break) — leave unchanged to only fix the reading below</div>
             <input id="fix-words-input" type="text">
             <div id="fix-words-reading-row" class="fix-words-reading-row" hidden>
-              <span class="label">Reading (optional)</span>
+              <span class="label">Reading — only shown for a single word, since Unidic can't be asked to re-guess one</span>
               <input id="fix-words-reading" type="text" placeholder="e.g. なうしか">
             </div>
             <div class="save-row">
@@ -1092,6 +1092,12 @@ const dictPanels = [
 
       const chosen = data.candidates.find(c => c.entry_id === tok.dict_entry_id);
       if (chosen) {
+        // The header reading is set from tok.lemma_reading (the Word's stored default) when
+        // the popover opens — that doesn't change just because a different JMdict sense was
+        // resolved for this occurrence, so once we know which candidate is actually chosen,
+        // show *its* reading instead (this also fires right after picking a candidate, since
+        // resolveOccurrence() re-renders this tab).
+        if (chosen.kana_forms.length) dictPopoverReadingEl.textContent = `「${chosen.kana_forms[0]}」`;
         container.appendChild(renderCandidate(chosen, tok, true));
         const others = data.candidates.filter(c => c.entry_id !== tok.dict_entry_id);
         if (others.length) {
@@ -1183,6 +1189,10 @@ function toggleFixSelection(tok, span) {
   fixWordsBarEl.hidden = !fixSelection.length;
   if (fixSelection.length) {
     fixWordsCountEl.textContent = `${fixSelection.length} word${fixSelection.length !== 1 ? 's' : ''} selected`;
+    // A single word can't be "split" further by this tool — selecting just one only makes
+    // sense to correct its reading, so say that instead of the generic (and confusing, for
+    // that case) "Fix segmentation".
+    fixWordsConfirmEl.textContent = fixSelection.length === 1 ? 'Fix reading →' : 'Fix segmentation →';
   }
 }
 

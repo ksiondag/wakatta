@@ -263,6 +263,22 @@ SegmentationOverride              ← implemented (user-defined tokenizer correc
 - [ ] **ML-assisted disambiguation** — homograph/reading resolution is currently entirely
       manual (the user picks via the popover, see Dictionary Lookup above); an ML-assisted
       default using sentence context is future work
+- [ ] **Per-work majority-vote resolution default** — right now `WordOccurrence.dict_entry_id`
+      is resolved strictly per occurrence, so picking かぜ over ふう for 風 on one page has no
+      effect anywhere else. In practice a recurring word (names especially, but plenty of
+      regular vocabulary too) tends to carry one consistent sense throughout a single work.
+      Plan: once a `Word` has one or more `resolved_by='user'` picks within a given work
+      (joining `word_occurrences` → `sentences` → `pages` → `work_id`), take the majority
+      `dict_entry_id` among those picks as the default — (a) immediately back-fill every other
+      occurrence of that `Word` in the same work that's currently unresolved or only
+      auto-resolved (never overwrite a *different* `resolved_by='user'` pick — that's a
+      deliberate contextual override, not noise), and (b) apply the same majority as the
+      default for newly tokenized occurrences going forward. Votes only ever come from
+      explicit user picks, never from auto-resolved ones, so the default can't reinforce
+      itself. Scope is per-work, not library-wide, since the same word can carry a different
+      sense in a different book. Worth a distinct `resolved_by` value (e.g. `"user_default"`)
+      so the UI can eventually show "inherited from your choice elsewhere in this work" instead
+      of conflating it with a fresh independent auto-resolution
 - [ ] **Retroactive segmentation reapply across works** — `POST /api/segmentation-overrides`
       already re-tokenizes every sentence *containing* the corrected span; extending this to
       proactively suggest corrections (e.g. flagging likely-wrong proper-noun splits) is future
