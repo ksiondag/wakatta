@@ -28,6 +28,7 @@ from sqlalchemy.orm import DeclarativeBase, Session
 import ctd
 import dictionary
 import kanjivg_db
+import reading_order
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
@@ -73,6 +74,7 @@ class Sentence(Base):
     prob = Column(Float, nullable=False)
     ocr_text = Column(Text)
     user_text = Column(Text)
+    order_index = Column(Integer, nullable=False, default=0)
 
 
 class JobRecord(Base):
@@ -255,6 +257,29 @@ def _reapply_override_everywhere(session: Session, span_text: str) -> None:
             _store_occurrences(session, s.id, s.user_text, "user")
 
 
+def _ensure_order_index_column() -> bool:
+    """`Sentence.order_index` was added after the table already existed on disk in
+    some installs — `Base.metadata.create_all` only creates missing tables, it
+    won't add a column to one that's already there. Patch it in place. Returns
+    True the first time the column has to be added, so the caller knows to
+    backfill it."""
+    with engine.begin() as conn:
+        cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(sentences)")}
+        if "order_index" in cols:
+            return False
+        conn.exec_driver_sql("ALTER TABLE sentences ADD COLUMN order_index INTEGER NOT NULL DEFAULT 0")
+        return True
+
+
+def _resort_page(session: Session, page_id: int) -> None:
+    """Recompute `order_index` for every sentence on a page from its current
+    geometry. Cheap enough to call after any box create/move/resize."""
+    sentences = session.query(Sentence).filter_by(page_id=page_id).all()
+    order = reading_order.reading_order([(s.x1, s.y1, s.x2, s.y2) for s in sentences])
+    for rank, idx in enumerate(order):
+        sentences[idx].order_index = rank
+
+
 async def _ocr_region(page_id: int, x1: int, y1: int, x2: int, y2: int) -> str | None:
     """Crop a region of a stored page PNG and run manga-ocr on it."""
     img_path = PAGES_DIR / f"{page_id}.png"
@@ -323,6 +348,7 @@ async def _process_one_page(
             session.flush()
             _store_occurrences(session, sentence.id, ocr_text, "ocr")
 
+        _resort_page(session, page.id)
         session.commit()
 
 
@@ -394,6 +420,13 @@ async def lifespan(app: FastAPI):
     PAGES_DIR.mkdir(parents=True, exist_ok=True)
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
+    if _ensure_order_index_column():
+        with Session(engine) as session:
+            page_ids = [p.id for p in session.query(Page.id).all()]
+            for page_id in page_ids:
+                _resort_page(session, page_id)
+            session.commit()
+        print(f"[migration] Backfilled reading order for {len(page_ids)} pages.")
 
     try:
         await asyncio.to_thread(dictionary.build_db, engine)
@@ -710,7 +743,12 @@ def get_page(page_id: int):
         page = session.get(Page, page_id)
         if page is None:
             raise HTTPException(404, "Page not found")
-        sentences = session.query(Sentence).filter_by(page_id=page_id).all()
+        sentences = (
+            session.query(Sentence)
+            .filter_by(page_id=page_id)
+            .order_by(Sentence.order_index)
+            .all()
+        )
         return _page_response(page, sentences)
 
 
@@ -749,6 +787,7 @@ async def create_sentence(page_id: int, req: SentenceCreate):
         _store_occurrences(session, s.id, ocr_text, "ocr")
         if req.user_text:
             _store_occurrences(session, s.id, req.user_text, "user")
+        _resort_page(session, page_id)
         session.commit()
         session.refresh(s)
         return _sentence_dict(s)
@@ -777,6 +816,7 @@ async def update_sentence(sentence_id: int, update: SentenceUpdate):
 
         if geometry_changed:
             s.x1, s.y1, s.x2, s.y2 = x1, y1, x2, y2
+            _resort_page(session, page_id)
 
         session.commit()
         session.refresh(s)

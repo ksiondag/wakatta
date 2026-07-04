@@ -78,6 +78,10 @@ input:focus { outline: none; border-color: #7070cc; }
 #toggle-boxes-btn { font-size: 0.85rem; padding: 5px 12px; }
 #toggle-boxes-btn.hidden-state { opacity: 0.6; }
 
+#touch-mode-btn { font-size: 0.85rem; padding: 5px 12px; }
+#touch-mode-btn.active { background: #2a3a4a; border-color: #4a6a8a; color: #90c0e0; }
+#touch-mode-btn.active:hover { background: #34445a; }
+
 .page-nav {
   display: flex;
   align-items: center;
@@ -110,6 +114,8 @@ input:focus { outline: none; border-color: #7070cc; }
   line-height: 0;
   transform-origin: center center;
   cursor: grab;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none; user-select: none;
 }
 #image-container.edit-mode { cursor: crosshair; }
 
@@ -124,7 +130,12 @@ input:focus { outline: none; border-color: #7070cc; }
 }
 #zoom-reset-btn:hover { opacity: 1; }
 
-#page-img { display: block; max-width: 100%; height: auto; }
+#page-img {
+  display: block; max-width: 100%; height: auto;
+  -webkit-touch-callout: none; /* suppress iOS's long-press "Save Image…" menu */
+  -webkit-user-drag: none;
+  -webkit-user-select: none; user-select: none;
+}
 
 #bbox-svg {
   position: absolute;
@@ -220,6 +231,7 @@ input:focus { outline: none; border-color: #7070cc; }
 #hw-canvas {
   display: block; background: #0d0d1a;
   cursor: crosshair; touch-action: none;
+  -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
 }
 .hw-controls { display: flex; gap: 10px; align-items: center; width: 100%; }
 #hw-status   { font-size: 0.8rem; color: #888; flex: 1; }
@@ -290,6 +302,7 @@ input:focus { outline: none; border-color: #7070cc; }
       <span id="sync-status"></span>
       <button id="toggle-boxes-btn" title="Show/hide bounding boxes">👁 Boxes</button>
       <button id="edit-mode-btn" title="Draw new boxes / move &amp; resize existing ones (disables pan &amp; zoom)">▭ Edit Boxes</button>
+      <button id="touch-mode-btn" title="Touch screen with pen: finger always pans/zooms the page, pen always selects, edits &amp; creates boxes (and draws in the input square)">✋✏️ Touch+Pen</button>
       <div class="page-nav">
         <button id="prev-page">◀</button>
         <span id="page-counter">—</span>
@@ -459,6 +472,7 @@ const hwEmptyEl      = document.getElementById('hw-empty');
 const syncStatusEl     = document.getElementById('sync-status');
 const editModeBtnEl    = document.getElementById('edit-mode-btn');
 const toggleBoxesBtnEl = document.getElementById('toggle-boxes-btn');
+const touchModeBtnEl   = document.getElementById('touch-mode-btn');
 const ocrLabelEl       = document.getElementById('ocr-label');
 const directionToggleEl = document.getElementById('direction-toggle');
 
@@ -792,7 +806,7 @@ function onPointerUp(e) {
 }
 
 imagePanelEl.addEventListener('pointerdown', e => {
-  if (editMode) { handleEditPointerDown(e); return; }
+  if (isEditGesture(e)) { handleEditPointerDown(e); return; }
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   if (activePointers.size === 0) {
     window.addEventListener('pointermove', onPointerMove);
@@ -838,6 +852,35 @@ editModeBtnEl.addEventListener('click', () => {
   toggleBoxesBtnEl.disabled = editMode; // editing needs the boxes visible
   applyBoxesVisibility();
 });
+
+// ── Touch screen with pen mode ──────────────────────────────────────────────────
+// When enabled, gesture routing no longer depends on the manual Edit Boxes toggle
+// for touch/pen input: a finger always pans/zooms (like default mouse behavior),
+// a pen always draws/edits/selects boxes (like edit mode) — regardless of
+// editMode's state. Mouse input is unaffected and keeps following editMode, so
+// hybrid devices (e.g. trackpad + touchscreen + pen) still work as before for it.
+const TOUCH_MODE_KEY = 'wakatta:touchMode';
+let touchMode = localStorage.getItem(TOUCH_MODE_KEY) === '1';
+
+function isEditGesture(e) {
+  if (touchMode) {
+    if (e.pointerType === 'pen') return true;
+    if (e.pointerType === 'touch') return false;
+  }
+  return editMode;
+}
+
+function applyTouchModeUI() {
+  touchModeBtnEl.classList.toggle('active', touchMode);
+  touchModeBtnEl.textContent = touchMode ? '✓ Touch+Pen' : '✋✏️ Touch+Pen';
+}
+
+touchModeBtnEl.addEventListener('click', () => {
+  touchMode = !touchMode;
+  localStorage.setItem(TOUCH_MODE_KEY, touchMode ? '1' : '0');
+  applyTouchModeUI();
+});
+applyTouchModeUI();
 
 // ── Show/hide bounding boxes ────────────────────────────────────────────────────
 // A reading-convenience toggle, separate from edit mode — always shown while
@@ -913,7 +956,7 @@ function cursorForHit(hit) {
 // Hover feedback (no gesture in progress) — separate from the gesture-driven
 // cursor changes below, which take over for the duration of an active drag.
 imagePanelEl.addEventListener('pointermove', e => {
-  if (editMode) {
+  if (isEditGesture(e)) {
     if (editAction) return;
     const p = clientToSvg(e.clientX, e.clientY);
     imageContainerEl.style.cursor = cursorForHit(hitTest(p.x, p.y));
@@ -1438,6 +1481,7 @@ function getPos(e) {
 
 hwCanvasEl.addEventListener('pointerdown', e => {
   if (activeIdx === null) return;
+  if (touchMode && e.pointerType === 'touch') return; // touch mode: only the pen draws here
   e.preventDefault(); drawing = true; currentStroke = [];
   const pt = getPos(e); currentStroke.push(pt);
   hwCtx.beginPath(); hwCtx.moveTo(pt.x, pt.y);

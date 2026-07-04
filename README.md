@@ -52,6 +52,21 @@ Primary machine: 4090 GPU, Arch Linux. Also runs on Framework 12 (CPU-only, slow
   auto-OCR text as reference. Draw on the handwriting canvas → recognition candidates → click
   to confirm; auto-saves to SQLite. Below the OCR text, a "Words" row shows the sentence's
   confirmed text as clickable, tokenized spans — see Dictionary Lookup below.
+- **Box editing** — the "▭ Edit Boxes" toggle repurposes the page panel for drawing new
+  boxes and moving/resizing existing ones (disables pan/zoom while active). A separate
+  "✋✏️ Touch+Pen" toggle (persisted in `localStorage`) changes gesture *routing* instead of
+  disabling anything: with it on, a finger always pans/zooms and a pen always
+  creates/edits/selects boxes (and draws in the handwriting canvas) regardless of the Edit
+  Boxes toggle's own state — for touchscreen-with-stylus devices (e.g. iPad + Apple Pencil)
+  where you want both without switching modes by hand. Mouse input is unaffected and still
+  follows the manual Edit Boxes toggle
+- **Reading order** — box numbering follows manga reading order (top row before bottom row,
+  right column before left column within a row), not raw detection order. Computed by
+  `reading_order.py` (a recursive row/column "xy-cut" heuristic: split the page along
+  whichever axis has a clean gap, alternating axis, until every box stands alone) and stored
+  per-sentence as `order_index`, recomputed whenever a box is OCR'd, drawn, or moved/resized.
+  `resort_pages.py` re-applies it to already-ingested pages on demand; a startup migration in
+  `server.py` backfills it automatically for pages ingested before this existed
 - SQLite (`data/wakatta.db`) stores Work → Page → Sentence; uploaded PDFs saved to `data/uploads/`
 
 ### Dictionary Lookup (`dictionary.py` + `static/reader.html`)
@@ -241,7 +256,15 @@ SegmentationOverride              ← implemented (user-defined tokenizer correc
 ### Quality
 - [x] **Page transcription UI** — page reader with SVG bbox overlay; click a region to
       transcribe its text via handwriting input when OCR fails or is wrong
-- [ ] **Bounding box editing** — add, move, and resize detected regions directly on the page image
+- [x] **Bounding box editing** — add, move, and resize detected regions directly on the page
+      image ("▭ Edit Boxes" toggle); see Page Reader above
+- [x] **Touch + pen input mode** — "✋✏️ Touch+Pen" toggle: finger always pans/zooms, pen
+      always creates/edits/selects boxes, independent of the Edit Boxes toggle; see Page
+      Reader above
+- [x] **Reading order** — bounding boxes numbered/ordered per manga reading order rather than
+      raw detection order (`reading_order.py`); see Page Reader above. Still iterating on edge
+      cases (tall boxes spanning multiple rows, overlapping regions) as they show up in real
+      pages
 - [x] **Pitch accent** — Kanjium dataset imported via `dictionary.py`; shown per-candidate in
       the dictionary popover as raw pattern number(s) (e.g. `[0]`, `[1,3]`) — see "Dictionary —
       Deferred" below for the richer visual version
