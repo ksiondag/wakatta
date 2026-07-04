@@ -82,6 +82,13 @@ input:focus { outline: none; border-color: #7070cc; }
 #touch-mode-btn.active { background: #2a3a4a; border-color: #4a6a8a; color: #90c0e0; }
 #touch-mode-btn.active:hover { background: #34445a; }
 
+#merge-mode-btn, #merge-confirm-btn { font-size: 0.85rem; padding: 5px 12px; }
+#merge-mode-btn.active { background: #3a2a4a; border-color: #6a4a8a; color: #c090e0; }
+#merge-mode-btn.active:hover { background: #44345a; }
+#merge-confirm-btn { display: none; }
+#bbox-svg rect.merge-selected { stroke: #ffd400 !important; stroke-width: 5 !important; fill: rgba(255,212,0,0.18) !important; }
+#bbox-svg rect.merge-marquee { fill: rgba(255,212,0,0.10); stroke: #ffd400; stroke-width: 2; stroke-dasharray: 6 4; pointer-events: none; }
+
 .page-nav {
   display: flex;
   align-items: center;
@@ -303,6 +310,8 @@ input:focus { outline: none; border-color: #7070cc; }
       <button id="toggle-boxes-btn" title="Show/hide bounding boxes">👁 Boxes</button>
       <button id="edit-mode-btn" title="Draw new boxes / move &amp; resize existing ones (disables pan &amp; zoom)">▭ Edit Boxes</button>
       <button id="touch-mode-btn" title="Touch screen with pen: finger always pans/zooms the page, pen always selects, edits &amp; creates boxes (and draws in the input square)">✋✏️ Touch+Pen</button>
+      <button id="merge-mode-btn" title="Click two or more boxes, then Merge to combine them into one (re-runs OCR on the combined region)">⧉ Select to Merge</button>
+      <button id="merge-confirm-btn" title="Combine the selected boxes into one">⧉ Merge</button>
       <div class="page-nav">
         <button id="prev-page">◀</button>
         <span id="page-counter">—</span>
@@ -473,6 +482,8 @@ const syncStatusEl     = document.getElementById('sync-status');
 const editModeBtnEl    = document.getElementById('edit-mode-btn');
 const toggleBoxesBtnEl = document.getElementById('toggle-boxes-btn');
 const touchModeBtnEl   = document.getElementById('touch-mode-btn');
+const mergeModeBtnEl   = document.getElementById('merge-mode-btn');
+const mergeConfirmBtnEl = document.getElementById('merge-confirm-btn');
 const ocrLabelEl       = document.getElementById('ocr-label');
 const directionToggleEl = document.getElementById('direction-toggle');
 
@@ -632,12 +643,31 @@ async function navigateTo(idx) {
   history.replaceState(null, '', `/read/${workId}?page=${idx + 1}`);
 
   const pageRecord = currentPages[idx];
-  const res = await fetch(`/api/pages/${pageRecord.id}`);
-  pageData  = await res.json();
-  activeIdx = null;
   closeDictPopover();
+  await reloadSentences();
 
-  // Overlay any not-yet-synced local edits/creates/deletes on top of the server's data.
+  pageImgEl.src = `/api/pages/${pageRecord.id}/image`;
+  pageImgEl.onload = () => resetZoom(); // refine fit-scale once real dimensions are laid out
+  bboxSvgEl.setAttribute('viewBox', `0 0 ${pageData.width} ${pageData.height}`);
+
+  regionInfoEl.style.display = 'none';
+  hwEmptyEl.style.display = 'block';
+  clearCanvas();
+  hwStatEl.textContent = 'Select a region';
+  resetZoom();
+  flushQueue();
+}
+
+// Re-fetches the current page's sentences from the server and re-overlays any
+// not-yet-synced local edits/creates/deletes on top — shared by navigateTo (full
+// page switch) and any in-place edit (e.g. merge) that needs a fresh authoritative
+// sentence list without reloading the image or resetting pan/zoom.
+async function reloadSentences() {
+  const pageRecord = currentPages[currentPageIdx];
+  const res = await fetch(`/api/pages/${pageRecord.id}`);
+  pageData = await res.json();
+  activeIdx = null;
+
   sentences = pageData.sentences
     .filter(s => !opQueue.some(op => op.type === 'delete' && op.sentenceId === s.id))
     .map(s => {
@@ -654,17 +684,7 @@ async function navigateTo(idx) {
       ocr_text: null, user_text: op.user_text ?? null, pending: true,
     })));
 
-  pageImgEl.src = `/api/pages/${pageRecord.id}/image`;
-  pageImgEl.onload = () => resetZoom(); // refine fit-scale once real dimensions are laid out
-  bboxSvgEl.setAttribute('viewBox', `0 0 ${pageData.width} ${pageData.height}`);
   renderBoxes();
-
-  regionInfoEl.style.display = 'none';
-  hwEmptyEl.style.display = 'block';
-  clearCanvas();
-  hwStatEl.textContent = 'Select a region';
-  resetZoom();
-  flushQueue();
 }
 
 function renderBoxes() {
@@ -806,6 +826,7 @@ function onPointerUp(e) {
 }
 
 imagePanelEl.addEventListener('pointerdown', e => {
+  if (mergeMode) { handleMergeSelectDown(e); return; }
   if (isEditGesture(e)) { handleEditPointerDown(e); return; }
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   if (activePointers.size === 0) {
@@ -827,9 +848,13 @@ imagePanelEl.addEventListener('pointerdown', e => {
   }
 });
 
-// A pinch/drag gesture shouldn't also register as a region-select click.
+// A pinch/drag gesture shouldn't also register as a region-select click — and while
+// merge-select mode is on, clicks are consumed entirely by handleMergeSelectDown/Up
+// (pointerdown/up, above); letting them also reach the per-rect click->selectRegion
+// listener would set activeIdx and trigger a renderBoxes() that wipes the
+// .merge-selected highlight on every click.
 bboxSvgEl.addEventListener('click', e => {
-  if (didDrag) { e.stopPropagation(); e.preventDefault(); }
+  if (didDrag || mergeMode) { e.stopPropagation(); e.preventDefault(); }
 }, true);
 
 window.addEventListener('resize', () => { clampPan(); applyTransform(); });
@@ -882,6 +907,130 @@ touchModeBtnEl.addEventListener('click', () => {
 });
 applyTouchModeUI();
 
+// ── Merge boxes ──────────────────────────────────────────────────────────────
+// A detector split across adjacent lines (or an earlier manual box) can leave one
+// word/sentence spread across several boxes. This mode collects clicks into a
+// selection instead of drawing/editing, then combines the selection server-side
+// (union the geometry, re-OCR once, delete the originals) — see
+// POST /api/pages/{page_id}/sentences/merge in server.py.
+
+let mergeMode = false;
+let mergeSelection = new Set();
+
+function boxIndexAt(px, py) {
+  for (let i = sentences.length - 1; i >= 0; i--) {
+    const s = sentences[i];
+    if (px >= s.x1 && px <= s.x2 && py >= s.y1 && py <= s.y2) return i;
+  }
+  return null;
+}
+
+function rectsOverlap(x1, y1, x2, y2, s) {
+  return x1 < s.x2 && s.x1 < x2 && y1 < s.y2 && s.y1 < y2;
+}
+
+let mergeDrag = null; // { start: {x,y}, previewEl, dragged }
+
+function handleMergeSelectDown(e) {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  const start = clientToSvg(e.clientX, e.clientY);
+  const previewEl = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  previewEl.setAttribute('class', 'merge-marquee');
+  previewEl.setAttribute('x', start.x); previewEl.setAttribute('y', start.y);
+  previewEl.setAttribute('width', 0); previewEl.setAttribute('height', 0);
+  bboxSvgEl.appendChild(previewEl);
+  mergeDrag = { start, previewEl, dragged: false };
+
+  window.addEventListener('pointermove', handleMergeSelectMove);
+  window.addEventListener('pointerup', handleMergeSelectUp);
+  window.addEventListener('pointercancel', handleMergeSelectUp);
+}
+
+function handleMergeSelectMove(e) {
+  if (!mergeDrag) return;
+  const p = clientToSvg(e.clientX, e.clientY);
+  const dx = p.x - mergeDrag.start.x, dy = p.y - mergeDrag.start.y;
+  if (Math.abs(dx) > 2 || Math.abs(dy) > 2) mergeDrag.dragged = true;
+
+  const x1 = Math.min(mergeDrag.start.x, p.x), x2 = Math.max(mergeDrag.start.x, p.x);
+  const y1 = Math.min(mergeDrag.start.y, p.y), y2 = Math.max(mergeDrag.start.y, p.y);
+  mergeDrag.previewEl.setAttribute('x', x1); mergeDrag.previewEl.setAttribute('y', y1);
+  mergeDrag.previewEl.setAttribute('width', x2 - x1); mergeDrag.previewEl.setAttribute('height', y2 - y1);
+  mergeDrag.final = { x1, y1, x2, y2 };
+}
+
+function handleMergeSelectUp(e) {
+  if (!mergeDrag) return;
+  window.removeEventListener('pointermove', handleMergeSelectMove);
+  window.removeEventListener('pointerup', handleMergeSelectUp);
+  window.removeEventListener('pointercancel', handleMergeSelectUp);
+  mergeDrag.previewEl.remove();
+
+  if (!mergeDrag.dragged) {
+    // A plain click/tap (no real drag): toggle whichever single box is underneath.
+    const idx = boxIndexAt(mergeDrag.start.x, mergeDrag.start.y);
+    if (idx !== null) {
+      if (mergeSelection.has(idx)) mergeSelection.delete(idx);
+      else mergeSelection.add(idx);
+    }
+  } else {
+    // Marquee drag: add every box the rectangle touches to the selection (never
+    // removes — click a box individually to deselect it).
+    const { x1, y1, x2, y2 } = mergeDrag.final;
+    sentences.forEach((s, i) => {
+      if (rectsOverlap(x1, y1, x2, y2, s)) mergeSelection.add(i);
+    });
+  }
+
+  mergeDrag = null;
+  updateMergeSelectionUI();
+}
+
+function updateMergeSelectionUI() {
+  bboxSvgEl.querySelectorAll('rect[data-idx]').forEach(r => {
+    r.classList.toggle('merge-selected', mergeSelection.has(Number(r.dataset.idx)));
+  });
+  mergeConfirmBtnEl.disabled = mergeSelection.size < 2;
+  mergeConfirmBtnEl.textContent = mergeSelection.size >= 2 ? `⧉ Merge (${mergeSelection.size})` : '⧉ Merge';
+}
+
+mergeModeBtnEl.addEventListener('click', () => {
+  mergeMode = !mergeMode;
+  mergeModeBtnEl.classList.toggle('active', mergeMode);
+  mergeConfirmBtnEl.style.display = mergeMode ? 'inline-block' : 'none';
+  mergeSelection.clear();
+  toggleBoxesBtnEl.disabled = editMode || mergeMode;
+  applyBoxesVisibility();
+  updateMergeSelectionUI();
+});
+
+mergeConfirmBtnEl.addEventListener('click', async () => {
+  const ids = [...mergeSelection].map(i => sentences[i].id).filter(id => typeof id === 'number');
+  if (ids.length < 2) {
+    alert('Selected boxes must already be saved (not pending) before merging.');
+    return;
+  }
+  mergeConfirmBtnEl.disabled = true;
+  try {
+    const res = await fetch(`/api/pages/${pageData.id}/sentences/merge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sentence_ids: ids }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    mergeMode = false;
+    mergeModeBtnEl.classList.remove('active');
+    mergeConfirmBtnEl.style.display = 'none';
+    mergeSelection.clear();
+    toggleBoxesBtnEl.disabled = editMode;
+    await reloadSentences();
+    applyBoxesVisibility();
+  } catch (err) {
+    alert('Merge failed: ' + err.message);
+    mergeConfirmBtnEl.disabled = false;
+  }
+});
+
 // ── Show/hide bounding boxes ────────────────────────────────────────────────────
 // A reading-convenience toggle, separate from edit mode — always shown while
 // editing regardless of this preference, since you need to see what you're editing.
@@ -889,7 +1038,7 @@ applyTouchModeUI();
 let boxesVisible = true;
 
 function applyBoxesVisibility() {
-  bboxSvgEl.style.display = (boxesVisible || editMode) ? '' : 'none';
+  bboxSvgEl.style.display = (boxesVisible || editMode || mergeMode) ? '' : 'none';
 }
 
 toggleBoxesBtnEl.addEventListener('click', () => {
@@ -938,11 +1087,8 @@ function hitTest(px, py) {
     }
     if (px >= s.x1 && px <= s.x2 && py >= s.y1 && py <= s.y2) return { type: 'move', idx: activeIdx };
   }
-  for (let i = sentences.length - 1; i >= 0; i--) {
-    const s = sentences[i];
-    if (px >= s.x1 && px <= s.x2 && py >= s.y1 && py <= s.y2) return { type: 'move', idx: i, reselect: true };
-  }
-  return null;
+  const idx = boxIndexAt(px, py);
+  return idx === null ? null : { type: 'move', idx, reselect: true };
 }
 
 // Resize cursors follow the diagonal of the corner being dragged. Moving a box

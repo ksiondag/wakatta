@@ -5,6 +5,7 @@ Distilled from manga-image-translator's detection pipeline:
   - letterbox preprocessing
   - cv2.dnn ONNX inference
   - SegDetector postprocessing (shapely + pyclipper for polygon unclip)
+  - proximity-based merging of individual detected text lines into blocks
 
 Only the CPU/ONNX path is implemented; GPU (.pt) is not needed here.
 """
@@ -26,6 +27,13 @@ MODEL_URL = (
 MODEL_HASH = "1a86ace74961413cbd650002e7bb4dcec4980ffa21b2f19b86933372071d718f"
 MODEL_PATH = Path(__file__).parent / "models" / "comictextdetector.pt.onnx"
 INPUT_SIZE = 1024
+
+# The model segments text line-by-line, so a single word or sentence often comes back as
+# several adjacent line boxes (e.g. one vertical column split into two stacked pieces, or
+# several columns of the same bubble). Boxes closer than this, as a multiple of their own
+# character size, are merged into one block — tuned to bridge normal intra-bubble spacing
+# while leaving the (usually much larger) gap between separate bubbles alone.
+MERGE_GAP_RATIO = 0.6
 
 
 @dataclass
@@ -153,6 +161,66 @@ def _extract_boxes(
     return results
 
 
+# --- line -> block merging ----------------------------------------------------
+
+def _dilated_xyxy(region: "TextRegion") -> tuple[float, float, float, float]:
+    x1, y1, x2, y2 = region.xyxy
+    char_size = max(min(x2 - x1, y2 - y1), 4)  # short side of a line box ~ one character
+    m = char_size * MERGE_GAP_RATIO
+    return x1 - m, y1 - m, x2 + m, y2 + m
+
+
+def _rects_overlap(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    return ax1 < bx2 and bx1 < ax2 and ay1 < by2 and by1 < ay2
+
+
+def merge_regions(regions: list["TextRegion"]) -> list["TextRegion"]:
+    """Merge individually-detected text lines that likely belong to the same word,
+    sentence, or speech bubble into single blocks — union-find over line boxes
+    dilated by a fraction of their own character size, only merging boxes that
+    share a reading direction (never mixes vertical and horizontal text)."""
+    if len(regions) <= 1:
+        return regions
+
+    parent = list(range(len(regions)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i: int, j: int) -> None:
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[ri] = rj
+
+    dilated = [_dilated_xyxy(r) for r in regions]
+    for i in range(len(regions)):
+        for j in range(i + 1, len(regions)):
+            if regions[i].direction != regions[j].direction:
+                continue
+            if _rects_overlap(dilated[i], dilated[j]):
+                union(i, j)
+
+    groups: dict[int, list[int]] = {}
+    for i in range(len(regions)):
+        groups.setdefault(find(i), []).append(i)
+
+    merged = []
+    for idxs in groups.values():
+        pts = np.concatenate([regions[i].pts for i in idxs], axis=0)
+        x1, y1 = pts.min(axis=0)
+        x2, y2 = pts.max(axis=0)
+        rect_pts = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32)
+        prob = min(regions[i].prob for i in idxs)
+        merged.append(TextRegion(pts=rect_pts, prob=prob, direction=regions[idxs[0]].direction))
+
+    return merged
+
+
 # --- public API --------------------------------------------------------------
 
 _net: cv2.dnn.Net | None = None
@@ -197,4 +265,4 @@ def detect(image_bgr: np.ndarray) -> list[TextRegion]:
         direction = "v" if h_box > w_box * 1.5 else "h"
         regions.append(TextRegion(pts=pts, prob=score, direction=direction))
 
-    return regions
+    return merge_regions(regions)

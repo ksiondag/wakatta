@@ -514,6 +514,10 @@ class SentenceUpdate(BaseModel):
     direction: str | None = None
 
 
+class SentenceMerge(BaseModel):
+    sentence_ids: list[int]
+
+
 class WordResolve(BaseModel):
     dict_entry_id: int
 
@@ -847,6 +851,68 @@ def delete_sentence(sentence_id: int):
             session.query(WordOccurrence).filter_by(sentence_id=sentence_id).delete()
         session.delete(s)
         session.commit()
+
+
+@app.post("/api/pages/{page_id}/sentences/merge", status_code=201)
+async def merge_sentences(page_id: int, req: SentenceMerge):
+    """Combine two or more existing boxes (e.g. text a detector split across
+    adjacent lines that actually belong to one word/sentence/bubble) into a
+    single sentence: union their bounding box, re-OCR that crop once, and
+    delete the originals."""
+    ids = list(dict.fromkeys(req.sentence_ids))
+    if len(ids) < 2:
+        raise HTTPException(400, "Select at least two sentences to merge")
+
+    with Session(engine) as session:
+        sentences = session.query(Sentence).filter(Sentence.id.in_(ids)).all()
+        if len(sentences) != len(ids):
+            raise HTTPException(404, "One or more sentences not found")
+        if any(s.page_id != page_id for s in sentences):
+            raise HTTPException(400, "All sentences must belong to the given page")
+
+        x1 = min(s.x1 for s in sentences)
+        y1 = min(s.y1 for s in sentences)
+        x2 = max(s.x2 for s in sentences)
+        y2 = max(s.y2 for s in sentences)
+        prob = min(s.prob for s in sentences)  # weakest link, same convention as ctd.py's own line merge
+        v_count = sum(1 for s in sentences if s.direction == "v")
+        direction = "v" if v_count * 2 >= len(sentences) else "h"
+
+        # Any manually-confirmed text on the pieces is concatenated in reading order
+        # (no separator — Japanese doesn't space words) rather than discarded.
+        order = reading_order.reading_order([(s.x1, s.y1, s.x2, s.y2) for s in sentences])
+        merged_user_text = "".join(sentences[i].user_text for i in order if sentences[i].user_text) or None
+
+        occurrence_ids = [
+            oid for (oid,) in session.query(WordOccurrence.id).filter(WordOccurrence.sentence_id.in_(ids)).all()
+        ]
+        if occurrence_ids:
+            session.query(WordLookup).filter(WordLookup.occurrence_id.in_(occurrence_ids)).delete(synchronize_session=False)
+            session.query(WordOccurrence).filter(WordOccurrence.id.in_(occurrence_ids)).delete(synchronize_session=False)
+        for s in sentences:
+            session.delete(s)
+        session.commit()
+
+    ocr_text = await _ocr_region(page_id, x1, y1, x2, y2)
+
+    with Session(engine) as session:
+        s = Sentence(
+            page_id=page_id,
+            x1=x1, y1=y1, x2=x2, y2=y2,
+            direction=direction,
+            prob=prob,
+            ocr_text=ocr_text,
+            user_text=merged_user_text,
+        )
+        session.add(s)
+        session.flush()
+        _store_occurrences(session, s.id, ocr_text, "ocr")
+        if merged_user_text:
+            _store_occurrences(session, s.id, merged_user_text, "user")
+        _resort_page(session, page_id)
+        session.commit()
+        session.refresh(s)
+        return _sentence_dict(s)
 
 
 # ── Routes — dictionary ─────────────────────────────────────────────────────────
