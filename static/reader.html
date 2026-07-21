@@ -63,7 +63,11 @@ input:focus { outline: none; border-color: #7070cc; }
   padding: 8px 14px;
   background: #12122a;
   border-bottom: 1px solid #2a2a44;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
+
+.reader-header > * { flex-shrink: 0; }
 
 #back-btn { padding: 5px 12px; font-size: 0.85rem; text-decoration: none; }
 #reader-work-title { flex: 1; font-size: 0.95rem; color: #aaa; }
@@ -88,6 +92,17 @@ input:focus { outline: none; border-color: #7070cc; }
 #merge-confirm-btn { display: none; }
 #bbox-svg rect.merge-selected { stroke: #ffd400 !important; stroke-width: 5 !important; fill: rgba(255,212,0,0.18) !important; }
 #bbox-svg rect.merge-marquee { fill: rgba(255,212,0,0.10); stroke: #ffd400; stroke-width: 2; stroke-dasharray: 6 4; pointer-events: none; }
+
+#reorder-mode-btn { font-size: 0.85rem; padding: 5px 12px; }
+#reorder-mode-btn.active { background: #1a3a3a; border-color: #2a6a6a; color: #70d0d0; }
+#reorder-mode-btn.active:hover { background: #204848; }
+#reorder-bar { display: flex; align-items: center; gap: 8px; }
+#reorder-bar .label { font-size: 0.8rem; color: #999; }
+#reorder-bar button, #reorder-bar select { font-size: 0.85rem; padding: 5px 10px; }
+#bbox-svg rect.reorder-placed { stroke: #00e0e0 !important; stroke-width: 5 !important; fill: rgba(0,224,224,0.16) !important; }
+#bbox-svg rect.reorder-unplaced { stroke-dasharray: 4 3; opacity: 0.55; }
+#bbox-svg text.reorder-label-placed { fill: #00e0e0 !important; font-weight: bold; }
+#bbox-svg rect.reorder-marquee { fill: rgba(0,224,224,0.10); stroke: #00e0e0; stroke-width: 2; stroke-dasharray: 6 4; pointer-events: none; }
 
 .page-nav {
   display: flex;
@@ -364,6 +379,20 @@ input:focus { outline: none; border-color: #7070cc; }
       <button id="touch-mode-btn" title="Touch screen with pen: finger always pans/zooms the page, pen always selects, edits &amp; creates boxes (and draws in the input square)">✋✏️ Touch+Pen</button>
       <button id="merge-mode-btn" title="Click two or more boxes, then Merge to combine them into one (re-runs OCR on the combined region)">⧉ Select to Merge</button>
       <button id="merge-confirm-btn" title="Combine the selected boxes into one">⧉ Merge</button>
+      <button id="reorder-mode-btn" title="Click boxes in reading order, or drag a marquee over several and they'll be sorted automatically">🔢 Reorder</button>
+      <div id="reorder-bar" style="display:none">
+        <span class="label">Sort selection:</span>
+        <select id="reorder-sort-select" title="How boxes caught by a marquee drag get ordered relative to each other">
+          <option value="rl">Right → Left</option>
+          <option value="lr">Left → Right</option>
+          <option value="td">Top → Bottom</option>
+          <option value="bu">Bottom → Top</option>
+        </select>
+        <button id="reorder-clear-btn" title="Clear the in-progress order and start over">↺ Clear</button>
+        <button id="reorder-confirm-btn" title="Save this reading order" disabled>✓ Save Order</button>
+        <button id="reorder-auto-btn" title="Discard the manual order and go back to automatic sorting">⚙ Auto-order</button>
+        <button id="reorder-cancel-btn" title="Exit without saving">✕ Cancel</button>
+      </div>
       <div class="page-nav">
         <button id="prev-page">◀</button>
         <span id="page-counter">—</span>
@@ -556,6 +585,13 @@ const toggleBoxesBtnEl = document.getElementById('toggle-boxes-btn');
 const touchModeBtnEl   = document.getElementById('touch-mode-btn');
 const mergeModeBtnEl   = document.getElementById('merge-mode-btn');
 const mergeConfirmBtnEl = document.getElementById('merge-confirm-btn');
+const reorderModeBtnEl    = document.getElementById('reorder-mode-btn');
+const reorderBarEl        = document.getElementById('reorder-bar');
+const reorderSortSelectEl = document.getElementById('reorder-sort-select');
+const reorderClearBtnEl   = document.getElementById('reorder-clear-btn');
+const reorderConfirmBtnEl = document.getElementById('reorder-confirm-btn');
+const reorderAutoBtnEl    = document.getElementById('reorder-auto-btn');
+const reorderCancelBtnEl  = document.getElementById('reorder-cancel-btn');
 const ocrLabelEl       = document.getElementById('ocr-label');
 const directionToggleEl = document.getElementById('direction-toggle');
 
@@ -899,6 +935,7 @@ function onPointerUp(e) {
 
 imagePanelEl.addEventListener('pointerdown', e => {
   if (mergeMode) { handleMergeSelectDown(e); return; }
+  if (reorderMode) { handleReorderSelectDown(e); return; }
   if (isEditGesture(e)) { handleEditPointerDown(e); return; }
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   if (activePointers.size === 0) {
@@ -926,7 +963,7 @@ imagePanelEl.addEventListener('pointerdown', e => {
 // listener would set activeIdx and trigger a renderBoxes() that wipes the
 // .merge-selected highlight on every click.
 bboxSvgEl.addEventListener('click', e => {
-  if (didDrag || mergeMode) { e.stopPropagation(); e.preventDefault(); }
+  if (didDrag || mergeMode || reorderMode) { e.stopPropagation(); e.preventDefault(); }
 }, true);
 
 window.addEventListener('resize', () => { clampPan(); applyTransform(); });
@@ -942,6 +979,7 @@ const HANDLE_PX = 14;       // corner-grab tolerance, in screen px
 
 editModeBtnEl.addEventListener('click', () => {
   editMode = !editMode;
+  if (editMode && reorderMode) exitReorderMode();
   editModeBtnEl.classList.toggle('active', editMode);
   editModeBtnEl.textContent = editMode ? '✓ Editing Boxes' : '▭ Edit Boxes';
   imageContainerEl.classList.toggle('edit-mode', editMode);
@@ -1068,6 +1106,7 @@ function updateMergeSelectionUI() {
 
 mergeModeBtnEl.addEventListener('click', () => {
   mergeMode = !mergeMode;
+  if (mergeMode && reorderMode) exitReorderMode();
   mergeModeBtnEl.classList.toggle('active', mergeMode);
   mergeConfirmBtnEl.style.display = mergeMode ? 'inline-block' : 'none';
   mergeSelection.clear();
@@ -1103,6 +1142,186 @@ mergeConfirmBtnEl.addEventListener('click', async () => {
   }
 });
 
+// ── Manual reading-order fix ────────────────────────────────────────────────────
+// The xy-cut heuristic in reading_order.py gets confused on text-dense pages
+// (overlapping columns, spilled-over boxes). This mode lets a user rebuild the
+// order by hand: click boxes one at a time to append them to the new sequence,
+// or drag a marquee over several at once — those get auto-sorted against each
+// other by whichever axis is selected in the sort dropdown, then appended as a
+// block. Saving sends the full sequence to PUT /api/pages/{page_id}/order,
+// which locks the page so future geometry edits don't let the heuristic
+// re-scramble it (see order_locked in server.py).
+
+let reorderMode = false;
+let reorderSequence = []; // indices into `sentences`, in the new order, built up as the user clicks/drags
+let reorderDrag = null;   // { start: {x,y}, previewEl, dragged }
+
+function reorderSortKey(i) {
+  const s = sentences[i];
+  switch (reorderSortSelectEl.value) {
+    case 'lr': return s.x1;
+    case 'rl': return -s.x2;
+    case 'td': return s.y1;
+    case 'bu': return -s.y2;
+    default:   return s.y1;
+  }
+}
+
+function handleReorderSelectDown(e) {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  const start = clientToSvg(e.clientX, e.clientY);
+  const previewEl = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  previewEl.setAttribute('class', 'reorder-marquee');
+  previewEl.setAttribute('x', start.x); previewEl.setAttribute('y', start.y);
+  previewEl.setAttribute('width', 0); previewEl.setAttribute('height', 0);
+  bboxSvgEl.appendChild(previewEl);
+  reorderDrag = { start, previewEl, dragged: false };
+
+  window.addEventListener('pointermove', handleReorderSelectMove);
+  window.addEventListener('pointerup', handleReorderSelectUp);
+  window.addEventListener('pointercancel', handleReorderSelectUp);
+}
+
+function handleReorderSelectMove(e) {
+  if (!reorderDrag) return;
+  const p = clientToSvg(e.clientX, e.clientY);
+  const dx = p.x - reorderDrag.start.x, dy = p.y - reorderDrag.start.y;
+  if (Math.abs(dx) > 2 || Math.abs(dy) > 2) reorderDrag.dragged = true;
+
+  const x1 = Math.min(reorderDrag.start.x, p.x), x2 = Math.max(reorderDrag.start.x, p.x);
+  const y1 = Math.min(reorderDrag.start.y, p.y), y2 = Math.max(reorderDrag.start.y, p.y);
+  reorderDrag.previewEl.setAttribute('x', x1); reorderDrag.previewEl.setAttribute('y', y1);
+  reorderDrag.previewEl.setAttribute('width', x2 - x1); reorderDrag.previewEl.setAttribute('height', y2 - y1);
+  reorderDrag.final = { x1, y1, x2, y2 };
+}
+
+function handleReorderSelectUp(e) {
+  if (!reorderDrag) return;
+  window.removeEventListener('pointermove', handleReorderSelectMove);
+  window.removeEventListener('pointerup', handleReorderSelectUp);
+  window.removeEventListener('pointercancel', handleReorderSelectUp);
+  reorderDrag.previewEl.remove();
+
+  if (!reorderDrag.dragged) {
+    // Plain click/tap: toggle the single box underneath — append it to the
+    // sequence, or drop it back out (and everything is left as-is otherwise).
+    const idx = boxIndexAt(reorderDrag.start.x, reorderDrag.start.y);
+    if (idx !== null) {
+      const pos = reorderSequence.indexOf(idx);
+      if (pos !== -1) reorderSequence.splice(pos, 1);
+      else reorderSequence.push(idx);
+    }
+  } else {
+    // Marquee drag: sort every not-yet-placed box the rectangle touches by the
+    // selected axis, then append them as a block.
+    const { x1, y1, x2, y2 } = reorderDrag.final;
+    const caught = [];
+    sentences.forEach((s, i) => {
+      if (!reorderSequence.includes(i) && rectsOverlap(x1, y1, x2, y2, s)) caught.push(i);
+    });
+    caught.sort((a, b) => reorderSortKey(a) - reorderSortKey(b));
+    reorderSequence.push(...caught);
+  }
+
+  reorderDrag = null;
+  updateReorderSelectionUI();
+}
+
+function updateReorderSelectionUI() {
+  bboxSvgEl.querySelectorAll('rect[data-idx]').forEach(r => {
+    const idx = Number(r.dataset.idx);
+    const placed = reorderSequence.includes(idx);
+    r.classList.toggle('reorder-placed', placed);
+    r.classList.toggle('reorder-unplaced', !placed);
+  });
+  bboxSvgEl.querySelectorAll('text[data-idx]').forEach(t => {
+    const idx = Number(t.dataset.idx);
+    const pos = reorderSequence.indexOf(idx);
+    t.classList.toggle('reorder-label-placed', pos !== -1);
+    t.textContent = pos !== -1 ? pos + 1 : '?';
+  });
+  const allPlaced = reorderSequence.length === sentences.length && sentences.length > 0;
+  reorderConfirmBtnEl.disabled = !allPlaced;
+  reorderConfirmBtnEl.textContent = allPlaced
+    ? '✓ Save Order'
+    : `✓ Save Order (${reorderSequence.length}/${sentences.length})`;
+}
+
+function exitReorderMode() {
+  reorderMode = false;
+  reorderModeBtnEl.classList.remove('active');
+  reorderBarEl.style.display = 'none';
+  reorderSequence = [];
+  toggleBoxesBtnEl.disabled = editMode || mergeMode;
+  applyBoxesVisibility();
+  renderBoxes();
+}
+
+reorderModeBtnEl.addEventListener('click', () => {
+  if (reorderMode) { exitReorderMode(); return; }
+  if (sentences.some(s => !s.id)) {
+    alert('Finish syncing pending boxes on this page before reordering.');
+    return;
+  }
+  if (mergeMode) {
+    mergeMode = false;
+    mergeModeBtnEl.classList.remove('active');
+    mergeConfirmBtnEl.style.display = 'none';
+    mergeSelection.clear();
+  }
+  if (editMode) {
+    editMode = false;
+    editModeBtnEl.classList.remove('active');
+    editModeBtnEl.textContent = '▭ Edit Boxes';
+    imageContainerEl.classList.remove('edit-mode');
+    imageContainerEl.style.cursor = 'grab';
+  }
+  reorderMode = true;
+  reorderModeBtnEl.classList.add('active');
+  reorderBarEl.style.display = 'flex';
+  reorderSequence = [];
+  toggleBoxesBtnEl.disabled = true;
+  applyBoxesVisibility();
+  updateReorderSelectionUI();
+});
+
+reorderClearBtnEl.addEventListener('click', () => {
+  reorderSequence = [];
+  updateReorderSelectionUI();
+});
+
+reorderCancelBtnEl.addEventListener('click', exitReorderMode);
+
+reorderConfirmBtnEl.addEventListener('click', async () => {
+  const ids = reorderSequence.map(i => sentences[i].id);
+  reorderConfirmBtnEl.disabled = true;
+  try {
+    const res = await fetch(`/api/pages/${pageData.id}/order`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sentence_ids: ids }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    exitReorderMode();
+    await reloadSentences();
+  } catch (err) {
+    alert('Saving order failed: ' + err.message);
+    reorderConfirmBtnEl.disabled = false;
+  }
+});
+
+reorderAutoBtnEl.addEventListener('click', async () => {
+  if (!confirm('Discard the manual order and go back to automatic sorting for this page?')) return;
+  try {
+    const res = await fetch(`/api/pages/${pageData.id}/resort`, { method: 'POST' });
+    if (!res.ok) throw new Error(await res.text());
+    exitReorderMode();
+    await reloadSentences();
+  } catch (err) {
+    alert('Reset failed: ' + err.message);
+  }
+});
+
 // ── Show/hide bounding boxes ────────────────────────────────────────────────────
 // A reading-convenience toggle, separate from edit mode — always shown while
 // editing regardless of this preference, since you need to see what you're editing.
@@ -1110,7 +1329,7 @@ mergeConfirmBtnEl.addEventListener('click', async () => {
 let boxesVisible = true;
 
 function applyBoxesVisibility() {
-  bboxSvgEl.style.display = (boxesVisible || editMode || mergeMode) ? '' : 'none';
+  bboxSvgEl.style.display = (boxesVisible || editMode || mergeMode || reorderMode) ? '' : 'none';
 }
 
 toggleBoxesBtnEl.addEventListener('click', () => {

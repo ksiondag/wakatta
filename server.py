@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from manga_ocr import MangaOcr
 from PIL import Image
 from pydantic import BaseModel
-from sqlalchemy import Column, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
+from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, func
 from sqlalchemy.orm import DeclarativeBase, Session
 
 import ctd
@@ -60,6 +60,10 @@ class Page(Base):
     page_num = Column(Integer, nullable=False)
     width = Column(Integer)
     height = Column(Integer)
+    # Once a user manually fixes reading order (see PUT .../order below), automatic
+    # re-sorting on box create/move/merge is suppressed for this page — the heuristic
+    # would otherwise clobber the manual fix on the next geometry edit.
+    order_locked = Column(Boolean, nullable=False, default=False)
     __table_args__ = (UniqueConstraint("work_id", "page_num"),)
 
 
@@ -272,9 +276,34 @@ def _ensure_order_index_column() -> bool:
         return True
 
 
+def _ensure_order_locked_column() -> None:
+    """`Page.order_locked` was added after the table already existed on disk in
+    some installs — see `_ensure_order_index_column` above for why this is needed."""
+    with engine.begin() as conn:
+        cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(pages)")}
+        if "order_locked" in cols:
+            return
+        conn.exec_driver_sql("ALTER TABLE pages ADD COLUMN order_locked BOOLEAN NOT NULL DEFAULT 0")
+
+
+def _next_order_index(session: Session, page_id: int) -> int:
+    """One past the current end of a page's order — where a newly-created box
+    lands on a manually-ordered (`order_locked`) page, since the heuristic that
+    would otherwise place it can't be trusted there."""
+    max_idx = session.query(func.max(Sentence.order_index)).filter_by(page_id=page_id).scalar()
+    return (max_idx if max_idx is not None else -1) + 1
+
+
 def _resort_page(session: Session, page_id: int) -> None:
     """Recompute `order_index` for every sentence on a page from its current
-    geometry. Cheap enough to call after any box create/move/resize."""
+    geometry. Cheap enough to call after any box create/move/resize.
+
+    No-op once a page's order has been manually fixed (`order_locked`) — the
+    heuristic isn't trusted for that page anymore, and re-running it on every
+    geometry edit would silently undo the manual fix."""
+    page = session.get(Page, page_id)
+    if page is not None and page.order_locked:
+        return
     sentences = session.query(Sentence).filter_by(page_id=page_id).all()
     order = reading_order.reading_order([(s.x1, s.y1, s.x2, s.y2) for s in sentences])
     for rank, idx in enumerate(order):
@@ -421,6 +450,7 @@ async def lifespan(app: FastAPI):
     PAGES_DIR.mkdir(parents=True, exist_ok=True)
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
+    _ensure_order_locked_column()
     if _ensure_order_index_column():
         with Session(engine) as session:
             page_ids = [p.id for p in session.query(Page.id).all()]
@@ -526,6 +556,10 @@ class SentenceMerge(BaseModel):
     sentence_ids: list[int]
 
 
+class PageOrderUpdate(BaseModel):
+    sentence_ids: list[int]  # every sentence on the page, in the desired reading order
+
+
 class WordResolve(BaseModel):
     dict_entry_id: int
 
@@ -578,6 +612,7 @@ def _page_response(page: Page, sentences: list[Sentence]) -> dict:
         "page_num": page.page_num,
         "width": page.width,
         "height": page.height,
+        "order_locked": page.order_locked,
         "sentences": [_sentence_dict(s) for s in sentences],
     }
 
@@ -786,6 +821,7 @@ async def create_sentence(page_id: int, req: SentenceCreate):
     ocr_text = await _ocr_region(page_id, x1, y1, x2, y2)
 
     with Session(engine) as session:
+        page = session.get(Page, page_id)
         s = Sentence(
             page_id=page_id,
             x1=x1, y1=y1, x2=x2, y2=y2,
@@ -793,13 +829,15 @@ async def create_sentence(page_id: int, req: SentenceCreate):
             prob=1.0,
             ocr_text=ocr_text,
             user_text=req.user_text,
+            order_index=_next_order_index(session, page_id) if page.order_locked else 0,
         )
         session.add(s)
         session.flush()
         _store_occurrences(session, s.id, ocr_text, "ocr")
         if req.user_text:
             _store_occurrences(session, s.id, req.user_text, "user")
-        _resort_page(session, page_id)
+        if not page.order_locked:
+            _resort_page(session, page_id)
         session.commit()
         session.refresh(s)
         return _sentence_dict(s)
@@ -891,6 +929,11 @@ async def merge_sentences(page_id: int, req: SentenceMerge):
         order = reading_order.reading_order([(s.x1, s.y1, s.x2, s.y2) for s in sentences])
         merged_user_text = "".join(sentences[i].user_text for i in order if sentences[i].user_text) or None
 
+        order_locked = session.get(Page, page_id).order_locked
+        # On a manually-ordered page, the merged box inherits the earliest position
+        # among the pieces it replaces, since the heuristic won't get a chance to place it.
+        merged_order_index = min(s.order_index for s in sentences) if order_locked else 0
+
         occurrence_ids = [
             oid for (oid,) in session.query(WordOccurrence.id).filter(WordOccurrence.sentence_id.in_(ids)).all()
         ]
@@ -911,16 +954,61 @@ async def merge_sentences(page_id: int, req: SentenceMerge):
             prob=prob,
             ocr_text=ocr_text,
             user_text=merged_user_text,
+            order_index=merged_order_index,
         )
         session.add(s)
         session.flush()
         _store_occurrences(session, s.id, ocr_text, "ocr")
         if merged_user_text:
             _store_occurrences(session, s.id, merged_user_text, "user")
-        _resort_page(session, page_id)
+        if not order_locked:
+            _resort_page(session, page_id)
         session.commit()
         session.refresh(s)
         return _sentence_dict(s)
+
+
+@app.put("/api/pages/{page_id}/order")
+def set_page_order(page_id: int, req: PageOrderUpdate):
+    """Apply a user-specified reading order (see the reorder mode in reader.html)
+    and lock the page so the geometry-based heuristic stops overriding it."""
+    with Session(engine) as session:
+        page = session.get(Page, page_id)
+        if page is None:
+            raise HTTPException(404, "Page not found")
+
+        sentences = session.query(Sentence).filter_by(page_id=page_id).all()
+        by_id = {s.id: s for s in sentences}
+        if set(req.sentence_ids) != set(by_id):
+            raise HTTPException(400, "sentence_ids must list every sentence on the page exactly once")
+
+        for rank, sentence_id in enumerate(req.sentence_ids):
+            by_id[sentence_id].order_index = rank
+        page.order_locked = True
+        session.commit()
+
+        sentences.sort(key=lambda s: s.order_index)
+        return _page_response(page, sentences)
+
+
+@app.post("/api/pages/{page_id}/resort")
+def resort_page(page_id: int):
+    """Discard any manual order fix and go back to the geometry-based heuristic."""
+    with Session(engine) as session:
+        page = session.get(Page, page_id)
+        if page is None:
+            raise HTTPException(404, "Page not found")
+        page.order_locked = False
+        _resort_page(session, page_id)
+        session.commit()
+
+        sentences = (
+            session.query(Sentence)
+            .filter_by(page_id=page_id)
+            .order_by(Sentence.order_index)
+            .all()
+        )
+        return _page_response(page, sentences)
 
 
 # ── Routes — dictionary ─────────────────────────────────────────────────────────
