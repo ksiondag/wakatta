@@ -80,6 +80,11 @@ class Sentence(Base):
     ocr_text = Column(Text)
     user_text = Column(Text)
     order_index = Column(Integer, nullable=False, default=0)
+    # Set when this sentence's text is a direct grammatical continuation of another
+    # (e.g. one line of dialogue split across two visually separate bubbles) — the
+    # two stay separate boxes/geometry, this just records the reading link. At most
+    # one sentence can continue into any given target (unique), enforced same-page.
+    continues_into_id = Column(Integer, ForeignKey("sentences.id"), nullable=True, unique=True)
 
 
 class JobRecord(Base):
@@ -286,6 +291,19 @@ def _ensure_order_locked_column() -> None:
         conn.exec_driver_sql("ALTER TABLE pages ADD COLUMN order_locked BOOLEAN NOT NULL DEFAULT 0")
 
 
+def _ensure_continues_into_column() -> None:
+    """`Sentence.continues_into_id` was added after the table already existed on
+    disk in some installs — see `_ensure_order_index_column` above for why this is
+    needed. SQLite can't add a UNIQUE column via ALTER TABLE, so the unique index
+    backing that constraint is created separately, only on that same first run."""
+    with engine.begin() as conn:
+        cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(sentences)")}
+        if "continues_into_id" in cols:
+            return
+        conn.exec_driver_sql("ALTER TABLE sentences ADD COLUMN continues_into_id INTEGER REFERENCES sentences(id)")
+        conn.exec_driver_sql("CREATE UNIQUE INDEX ix_sentences_continues_into_id ON sentences(continues_into_id)")
+
+
 def _next_order_index(session: Session, page_id: int) -> int:
     """One past the current end of a page's order — where a newly-created box
     lands on a manually-ordered (`order_locked`) page, since the heuristic that
@@ -451,6 +469,7 @@ async def lifespan(app: FastAPI):
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
     _ensure_order_locked_column()
+    _ensure_continues_into_column()
     if _ensure_order_index_column():
         with Session(engine) as session:
             page_ids = [p.id for p in session.query(Page.id).all()]
@@ -560,6 +579,10 @@ class PageOrderUpdate(BaseModel):
     sentence_ids: list[int]  # every sentence on the page, in the desired reading order
 
 
+class SentenceLink(BaseModel):
+    target_id: int
+
+
 class WordResolve(BaseModel):
     dict_entry_id: int
 
@@ -588,6 +611,7 @@ def _sentence_dict(s: Sentence) -> dict:
         "prob": round(s.prob, 3),
         "ocr_text": s.ocr_text,
         "user_text": s.user_text,
+        "continues_into_id": s.continues_into_id,
     }
 
 
@@ -606,6 +630,12 @@ def _occurrence_dict(o: WordOccurrence, word: Word) -> dict:
 
 
 def _page_response(page: Page, sentences: list[Sentence]) -> dict:
+    continues_from = {s.continues_into_id: s.id for s in sentences if s.continues_into_id is not None}
+    sentence_dicts = []
+    for s in sentences:
+        d = _sentence_dict(s)
+        d["continues_from_id"] = continues_from.get(s.id)
+        sentence_dicts.append(d)
     return {
         "id": page.id,
         "work_id": page.work_id,
@@ -613,7 +643,7 @@ def _page_response(page: Page, sentences: list[Sentence]) -> dict:
         "width": page.width,
         "height": page.height,
         "order_locked": page.order_locked,
-        "sentences": [_sentence_dict(s) for s in sentences],
+        "sentences": sentence_dicts,
     }
 
 
@@ -895,6 +925,8 @@ def delete_sentence(sentence_id: int):
         if occurrence_ids:
             session.query(WordLookup).filter(WordLookup.occurrence_id.in_(occurrence_ids)).delete(synchronize_session=False)
             session.query(WordOccurrence).filter_by(sentence_id=sentence_id).delete()
+        # Drop the dangling end of any continuation link touching this box.
+        session.query(Sentence).filter_by(continues_into_id=sentence_id).update({"continues_into_id": None})
         session.delete(s)
         session.commit()
 
@@ -940,6 +972,12 @@ async def merge_sentences(page_id: int, req: SentenceMerge):
         if occurrence_ids:
             session.query(WordLookup).filter(WordLookup.occurrence_id.in_(occurrence_ids)).delete(synchronize_session=False)
             session.query(WordOccurrence).filter(WordOccurrence.id.in_(occurrence_ids)).delete(synchronize_session=False)
+        # Any continuation link pointing at one of the merged-away boxes is dropped —
+        # its endpoint no longer exists, and there's no unambiguous single piece
+        # among the merged set to hand it off to.
+        session.query(Sentence).filter(Sentence.continues_into_id.in_(ids)).update(
+            {"continues_into_id": None}, synchronize_session=False
+        )
         for s in sentences:
             session.delete(s)
         session.commit()
@@ -1009,6 +1047,73 @@ def resort_page(page_id: int):
             .all()
         )
         return _page_response(page, sentences)
+
+
+@app.post("/api/sentences/{sentence_id}/link-next")
+def link_sentences(sentence_id: int, req: SentenceLink):
+    """Mark `sentence_id`'s text as continuing directly into `req.target_id` — e.g.
+    one line of dialogue split across two visually separate bubbles/boxes that a
+    plain merge shouldn't combine (they're genuinely different areas of the page).
+    Doesn't touch geometry: repositions the target to immediately follow the
+    source in reading order and locks the page, the same way manual reordering
+    does, so the two are guaranteed to read back-to-back."""
+    if sentence_id == req.target_id:
+        raise HTTPException(400, "A sentence can't continue into itself")
+
+    with Session(engine) as session:
+        src = session.get(Sentence, sentence_id)
+        dst = session.get(Sentence, req.target_id)
+        if src is None or dst is None:
+            raise HTTPException(404, "Sentence not found")
+        if src.page_id != dst.page_id:
+            raise HTTPException(400, "Both sentences must belong to the same page")
+
+        existing = session.query(Sentence).filter_by(continues_into_id=req.target_id).first()
+        if existing is not None and existing.id != sentence_id:
+            raise HTTPException(400, "That box already continues from another one")
+
+        # Cycle guard: walk forward from the proposed target and make sure it
+        # never loops back to the source.
+        cur, hops = dst, 0
+        while cur is not None:
+            if cur.id == sentence_id:
+                raise HTTPException(400, "That link would create a cycle")
+            hops += 1
+            if hops > 1000:
+                raise HTTPException(500, "Continuation chain too long to validate")
+            cur = session.get(Sentence, cur.continues_into_id) if cur.continues_into_id is not None else None
+
+        src.continues_into_id = req.target_id
+
+        page_id = src.page_id
+        sentences = (
+            session.query(Sentence).filter_by(page_id=page_id).order_by(Sentence.order_index).all()
+        )
+        order_ids = [s.id for s in sentences]
+        order_ids.remove(req.target_id)
+        order_ids.insert(order_ids.index(sentence_id) + 1, req.target_id)
+        by_id = {s.id: s for s in sentences}
+        for rank, sid in enumerate(order_ids):
+            by_id[sid].order_index = rank
+
+        page = session.get(Page, page_id)
+        page.order_locked = True
+        session.commit()
+
+        sentences = (
+            session.query(Sentence).filter_by(page_id=page_id).order_by(Sentence.order_index).all()
+        )
+        return _page_response(page, sentences)
+
+
+@app.delete("/api/sentences/{sentence_id}/link-next")
+def unlink_sentence(sentence_id: int):
+    with Session(engine) as session:
+        s = session.get(Sentence, sentence_id)
+        if s is None:
+            raise HTTPException(404, "Sentence not found")
+        s.continues_into_id = None
+        session.commit()
 
 
 # ── Routes — dictionary ─────────────────────────────────────────────────────────

@@ -104,6 +104,26 @@ input:focus { outline: none; border-color: #7070cc; }
 #bbox-svg text.reorder-label-placed { fill: #00e0e0 !important; font-weight: bold; }
 #bbox-svg rect.reorder-marquee { fill: rgba(0,224,224,0.10); stroke: #00e0e0; stroke-width: 2; stroke-dasharray: 6 4; pointer-events: none; }
 
+#link-mode-btn { font-size: 0.85rem; padding: 5px 12px; }
+#link-mode-btn.active { background: #4a3a1a; border-color: #8a6a2a; color: #e0b060; }
+#link-mode-btn.active:hover { background: #5a4624; }
+#bbox-svg rect.link-pending { stroke: #ffae00 !important; stroke-width: 5 !important; fill: rgba(255,174,0,0.18) !important; }
+
+.continuation-row {
+  font-size: 0.8rem;
+  color: #999;
+  background: #1c1c34;
+  border: 1px dashed #555;
+  border-radius: 5px;
+  padding: 5px 8px;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.continuation-row span { flex: 1; color: #bbb; }
+.continuation-row button { font-size: 0.75rem; padding: 3px 8px; }
+
 .page-nav {
   display: flex;
   align-items: center;
@@ -393,6 +413,7 @@ input:focus { outline: none; border-color: #7070cc; }
         <button id="reorder-auto-btn" title="Discard the manual order and go back to automatic sorting">⚙ Auto-order</button>
         <button id="reorder-cancel-btn" title="Exit without saving">✕ Cancel</button>
       </div>
+      <button id="link-mode-btn" title="Click a box, then the box its text continues into (e.g. one line split across two separate bubbles). Doesn't merge them — just marks the reading link and pins them adjacent in order">🔗 Link</button>
       <div class="page-nav">
         <button id="prev-page">◀</button>
         <span id="page-counter">—</span>
@@ -419,11 +440,18 @@ input:focus { outline: none; border-color: #7070cc; }
         </div>
 
         <div class="region-info" id="region-info" style="display:none">
+          <div class="continuation-row" id="continues-from-row" hidden>
+            <span>⤴ continues from: <span id="continues-from-text"></span></span>
+          </div>
           <div class="region-info-header">
             <div class="label" id="ocr-label">OCR (auto-detected)</div>
             <button id="direction-toggle" title="Toggle vertical/horizontal text direction">↕ v</button>
           </div>
           <div id="ocr-text">—</div>
+          <div class="continuation-row" id="continues-into-row" hidden>
+            <span>⤵ continues into: <span id="continues-into-text"></span></span>
+            <button id="unlink-btn" title="Remove this continuation link">🔗✕ Unlink</button>
+          </div>
           <div class="region-info-header">
             <div class="label">Words (click for dictionary)</div>
             <button id="fix-words-btn" title="Select words to merge or split">✎ Fix</button>
@@ -592,6 +620,12 @@ const reorderClearBtnEl   = document.getElementById('reorder-clear-btn');
 const reorderConfirmBtnEl = document.getElementById('reorder-confirm-btn');
 const reorderAutoBtnEl    = document.getElementById('reorder-auto-btn');
 const reorderCancelBtnEl  = document.getElementById('reorder-cancel-btn');
+const linkModeBtnEl        = document.getElementById('link-mode-btn');
+const continuesFromRowEl   = document.getElementById('continues-from-row');
+const continuesFromTextEl  = document.getElementById('continues-from-text');
+const continuesIntoRowEl   = document.getElementById('continues-into-row');
+const continuesIntoTextEl  = document.getElementById('continues-into-text');
+const unlinkBtnEl          = document.getElementById('unlink-btn');
 const ocrLabelEl       = document.getElementById('ocr-label');
 const directionToggleEl = document.getElementById('direction-toggle');
 
@@ -936,6 +970,7 @@ function onPointerUp(e) {
 imagePanelEl.addEventListener('pointerdown', e => {
   if (mergeMode) { handleMergeSelectDown(e); return; }
   if (reorderMode) { handleReorderSelectDown(e); return; }
+  if (linkMode) { handleLinkSelectDown(e); return; }
   if (isEditGesture(e)) { handleEditPointerDown(e); return; }
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   if (activePointers.size === 0) {
@@ -963,7 +998,7 @@ imagePanelEl.addEventListener('pointerdown', e => {
 // listener would set activeIdx and trigger a renderBoxes() that wipes the
 // .merge-selected highlight on every click.
 bboxSvgEl.addEventListener('click', e => {
-  if (didDrag || mergeMode || reorderMode) { e.stopPropagation(); e.preventDefault(); }
+  if (didDrag || mergeMode || reorderMode || linkMode) { e.stopPropagation(); e.preventDefault(); }
 }, true);
 
 window.addEventListener('resize', () => { clampPan(); applyTransform(); });
@@ -980,6 +1015,7 @@ const HANDLE_PX = 14;       // corner-grab tolerance, in screen px
 editModeBtnEl.addEventListener('click', () => {
   editMode = !editMode;
   if (editMode && reorderMode) exitReorderMode();
+  if (editMode && linkMode) exitLinkMode();
   editModeBtnEl.classList.toggle('active', editMode);
   editModeBtnEl.textContent = editMode ? '✓ Editing Boxes' : '▭ Edit Boxes';
   imageContainerEl.classList.toggle('edit-mode', editMode);
@@ -1107,6 +1143,7 @@ function updateMergeSelectionUI() {
 mergeModeBtnEl.addEventListener('click', () => {
   mergeMode = !mergeMode;
   if (mergeMode && reorderMode) exitReorderMode();
+  if (mergeMode && linkMode) exitLinkMode();
   mergeModeBtnEl.classList.toggle('active', mergeMode);
   mergeConfirmBtnEl.style.display = mergeMode ? 'inline-block' : 'none';
   mergeSelection.clear();
@@ -1276,6 +1313,7 @@ reorderModeBtnEl.addEventListener('click', () => {
     imageContainerEl.classList.remove('edit-mode');
     imageContainerEl.style.cursor = 'grab';
   }
+  if (linkMode) exitLinkMode();
   reorderMode = true;
   reorderModeBtnEl.classList.add('active');
   reorderBarEl.style.display = 'flex';
@@ -1322,6 +1360,134 @@ reorderAutoBtnEl.addEventListener('click', async () => {
   }
 });
 
+// ── Link boxes (continuation) ───────────────────────────────────────────────────
+// For text that spills from one box into a genuinely separate one (e.g. one line
+// of dialogue split across two visually distinct bubbles) — merge would wrongly
+// union their geometry into one box spanning both areas. This instead just
+// records the reading link: click the earlier box, then the one its text
+// continues into. See POST/DELETE /api/sentences/{id}/link-next in server.py,
+// which also pins the target immediately after the source in reading order.
+
+let linkMode = false;
+let linkPendingIdx = null; // index into `sentences` of the box clicked first, awaiting its partner
+let linkDrag = null;       // { start: {x,y}, dragged } — only used to tell a click from a pan/drag
+
+function handleLinkSelectDown(e) {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  linkDrag = { start: clientToSvg(e.clientX, e.clientY), dragged: false };
+  window.addEventListener('pointermove', handleLinkSelectMove);
+  window.addEventListener('pointerup', handleLinkSelectUp);
+  window.addEventListener('pointercancel', handleLinkSelectCancel);
+}
+
+function handleLinkSelectMove(e) {
+  if (!linkDrag) return;
+  const p = clientToSvg(e.clientX, e.clientY);
+  if (Math.abs(p.x - linkDrag.start.x) > 2 || Math.abs(p.y - linkDrag.start.y) > 2) linkDrag.dragged = true;
+}
+
+function handleLinkSelectCancel() {
+  window.removeEventListener('pointermove', handleLinkSelectMove);
+  window.removeEventListener('pointerup', handleLinkSelectUp);
+  window.removeEventListener('pointercancel', handleLinkSelectCancel);
+  linkDrag = null;
+}
+
+async function handleLinkSelectUp(e) {
+  if (!linkDrag) return;
+  const { start, dragged } = linkDrag;
+  handleLinkSelectCancel();
+  if (dragged) return; // a pinch/pan-style gesture, not a box pick
+
+  const idx = boxIndexAt(start.x, start.y);
+  if (idx === null) return;
+
+  if (linkPendingIdx === null) {
+    linkPendingIdx = idx;
+    updateLinkSelectionUI();
+    return;
+  }
+  if (linkPendingIdx === idx) {
+    linkPendingIdx = null; // clicking the pending box again cancels it
+    updateLinkSelectionUI();
+    return;
+  }
+
+  const fromId = sentences[linkPendingIdx].id;
+  const toId = sentences[idx].id;
+  linkPendingIdx = null;
+  updateLinkSelectionUI();
+  try {
+    const res = await fetch(`/api/sentences/${fromId}/link-next`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_id: toId }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    await reloadSentences();
+  } catch (err) {
+    alert('Link failed: ' + err.message);
+  }
+}
+
+function updateLinkSelectionUI() {
+  bboxSvgEl.querySelectorAll('rect[data-idx]').forEach(r => {
+    r.classList.toggle('link-pending', Number(r.dataset.idx) === linkPendingIdx);
+  });
+}
+
+function exitLinkMode() {
+  linkMode = false;
+  linkPendingIdx = null;
+  linkModeBtnEl.classList.remove('active');
+  toggleBoxesBtnEl.disabled = editMode || mergeMode;
+  applyBoxesVisibility();
+  renderBoxes();
+}
+
+linkModeBtnEl.addEventListener('click', () => {
+  if (linkMode) { exitLinkMode(); return; }
+  if (sentences.some(s => !s.id)) {
+    alert('Finish syncing pending boxes on this page before linking.');
+    return;
+  }
+  if (mergeMode) {
+    mergeMode = false;
+    mergeModeBtnEl.classList.remove('active');
+    mergeConfirmBtnEl.style.display = 'none';
+    mergeSelection.clear();
+  }
+  if (editMode) {
+    editMode = false;
+    editModeBtnEl.classList.remove('active');
+    editModeBtnEl.textContent = '▭ Edit Boxes';
+    imageContainerEl.classList.remove('edit-mode');
+    imageContainerEl.style.cursor = 'grab';
+  }
+  if (reorderMode) exitReorderMode();
+  linkMode = true;
+  linkPendingIdx = null;
+  linkModeBtnEl.classList.add('active');
+  toggleBoxesBtnEl.disabled = true;
+  applyBoxesVisibility();
+  updateLinkSelectionUI();
+});
+
+unlinkBtnEl.addEventListener('click', async () => {
+  const s = sentences[activeIdx];
+  if (!s || s.continues_into_id == null) return;
+  const sentenceId = s.id;
+  try {
+    const res = await fetch(`/api/sentences/${sentenceId}/link-next`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(await res.text());
+    await reloadSentences();
+    const idx = sentences.findIndex(x => x.id === sentenceId);
+    if (idx !== -1) selectRegion(idx);
+  } catch (err) {
+    alert('Unlink failed: ' + err.message);
+  }
+});
+
 // ── Show/hide bounding boxes ────────────────────────────────────────────────────
 // A reading-convenience toggle, separate from edit mode — always shown while
 // editing regardless of this preference, since you need to see what you're editing.
@@ -1329,7 +1495,7 @@ reorderAutoBtnEl.addEventListener('click', async () => {
 let boxesVisible = true;
 
 function applyBoxesVisibility() {
-  bboxSvgEl.style.display = (boxesVisible || editMode || mergeMode || reorderMode) ? '' : 'none';
+  bboxSvgEl.style.display = (boxesVisible || editMode || mergeMode || reorderMode || linkMode) ? '' : 'none';
 }
 
 toggleBoxesBtnEl.addEventListener('click', () => {
@@ -1520,6 +1686,14 @@ function selectRegion(idx) {
   ocrLabelEl.textContent = s.pending ? 'OCR (awaiting sync)' : 'OCR (auto-detected)';
   ocrTextEl.textContent = s.ocr_text ?? '—';
   renderTokenizedText(s.id ?? null);
+
+  const fromSrc = sentences.find(x => x.id === s.continues_from_id);
+  continuesFromRowEl.hidden = !fromSrc;
+  if (fromSrc) continuesFromTextEl.textContent = fromSrc.user_text || fromSrc.ocr_text || '—';
+
+  const intoDst = sentences.find(x => x.id === s.continues_into_id);
+  continuesIntoRowEl.hidden = !intoDst;
+  if (intoDst) continuesIntoTextEl.textContent = intoDst.user_text || intoDst.ocr_text || '—';
   userTextEl.value = s.user_text ?? '';
   directionToggleEl.textContent = s.direction === 'v' ? '↕ v' : '↔ h';
   saveStatEl.textContent = '';
