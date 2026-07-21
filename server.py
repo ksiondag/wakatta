@@ -437,6 +437,7 @@ async def lifespan(app: FastAPI):
 
     try:
         await asyncio.to_thread(kanji.build_db, engine)
+        await asyncio.to_thread(kanji.build_component_index, engine)
     except FileNotFoundError as e:
         print(f"[kanji] {e}")
         print("[kanji] Kanji lookups will return 503 until setup_kanjidic.py is run.")
@@ -948,6 +949,24 @@ def dict_lookup(lemma: str | None = None, surface: str | None = None, reading: s
     if not any([lemma, surface, reading]):
         raise HTTPException(400, "Provide at least one of lemma, surface, reading")
     return dictionary.lookup(engine, lemma=lemma, surface=surface, reading=reading)
+
+
+@app.get("/api/radicals")
+def list_radicals():
+    return [
+        {"number": number, "char": char, "name": name}
+        for number, (char, name) in kanji.KANGXI_RADICALS.items()
+    ]
+
+
+@app.get("/api/kanji/by-components")
+def kanji_by_components(chars: str):
+    if not kanji.is_ready(engine):
+        raise HTTPException(503, "Kanji data not loaded — run setup_kanjidic.py")
+    components = [c for c in dict.fromkeys(chars.split(",")) if c]
+    if not components:
+        raise HTTPException(400, "Provide at least one component character")
+    return kanji.search_by_components(engine, components)
 
 
 @app.get("/api/kanji/{char}")

@@ -65,12 +65,101 @@
     color: #aaa;
   }
 
-  #candidates {
+  #candidates, #radical-results {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
     justify-content: center;
     max-width: 520px;
+  }
+
+  .mode-toggle {
+    display: flex;
+    gap: 8px;
+  }
+
+  .mode-btn {
+    padding: 6px 14px;
+    border: 1px solid #444;
+    border-radius: 6px;
+    background: #202030;
+    color: #999;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  .mode-btn.active {
+    background: #3a3a7a;
+    border-color: #8888ff;
+    color: #eee;
+  }
+
+  #radical-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    max-width: 520px;
+  }
+
+  .chips-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: center;
+    min-height: 1.6rem;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border: 1px solid #7070cc;
+    border-radius: 14px;
+    background: #2a2a4e;
+    font-size: 1.1rem;
+  }
+
+  .chip-remove {
+    cursor: pointer;
+    color: #999;
+    font-size: 0.75rem;
+  }
+  .chip-remove:hover { color: #f0a060; }
+
+  #radical-grid-toggle {
+    font-size: 0.8rem;
+    padding: 5px 12px;
+  }
+
+  #radical-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
+    gap: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #333;
+    border-radius: 6px;
+    background: #16162a;
+  }
+
+  .radical-btn {
+    padding: 4px 0;
+    border: 1px solid #333;
+    border-radius: 4px;
+    background: #202030;
+    color: #ccc;
+    font-size: 1.1rem;
+    cursor: pointer;
+  }
+  .radical-btn:hover { background: #3a3a5e; border-color: #7070cc; }
+
+  .results-status {
+    color: #777;
+    font-size: 0.85rem;
   }
 
   .candidate {
@@ -140,6 +229,11 @@
 
 <h1>わかった — Handwriting Recognition</h1>
 
+<div class="mode-toggle">
+  <button id="mode-kanji-btn" class="mode-btn active">Draw kanji</button>
+  <button id="mode-radical-btn" class="mode-btn">By radicals</button>
+</div>
+
 <div id="canvas-wrap">
   <canvas id="canvas" width="480" height="480"></canvas>
 </div>
@@ -151,6 +245,13 @@
 </div>
 
 <div id="candidates"></div>
+
+<div id="radical-panel" hidden>
+  <div class="chips-row" id="radical-chips"></div>
+  <button id="radical-grid-toggle">Show radical list</button>
+  <div id="radical-grid" hidden></div>
+  <div id="radical-results"></div>
+</div>
 
 <div id="confirmed-label">Confirmed</div>
 <div id="confirmed"></div>
@@ -165,6 +266,14 @@ const statusEl = document.getElementById('status');
 const strokeCountEl = document.getElementById('stroke-count');
 const confirmedEl = document.getElementById('confirmed');
 const badgeEl = document.getElementById('connection-badge');
+
+const modeKanjiBtn = document.getElementById('mode-kanji-btn');
+const modeRadicalBtn = document.getElementById('mode-radical-btn');
+const radicalPanelEl = document.getElementById('radical-panel');
+const radicalChipsEl = document.getElementById('radical-chips');
+const radicalGridToggleBtn = document.getElementById('radical-grid-toggle');
+const radicalGridEl = document.getElementById('radical-grid');
+const radicalResultsEl = document.getElementById('radical-results');
 
 ctx.strokeStyle = '#e8e8ff';
 ctx.lineWidth = 3;
@@ -205,6 +314,116 @@ if ('serviceWorker' in navigator) {
     console.warn('SW registration failed:', err);
   });
 }
+
+// --- Mode: draw whole kanji vs. narrow by radicals/components ---
+
+let mode = 'kanji'; // 'kanji' | 'radical'
+let selectedRadicals = [];
+let radicalsList = null;
+
+function setMode(newMode) {
+  mode = newMode;
+  modeKanjiBtn.classList.toggle('active', mode === 'kanji');
+  modeRadicalBtn.classList.toggle('active', mode === 'radical');
+  radicalPanelEl.hidden = mode !== 'radical';
+  clearCanvas();
+}
+
+modeKanjiBtn.addEventListener('click', () => setMode('kanji'));
+modeRadicalBtn.addEventListener('click', () => setMode('radical'));
+
+function addRadical(char) {
+  if (!selectedRadicals.includes(char)) {
+    selectedRadicals.push(char);
+    renderChips();
+    refreshResults();
+  }
+}
+
+function removeRadical(char) {
+  selectedRadicals = selectedRadicals.filter(c => c !== char);
+  renderChips();
+  refreshResults();
+}
+
+function renderChips() {
+  radicalChipsEl.innerHTML = '';
+  selectedRadicals.forEach(char => {
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.innerHTML = `<span>${char}</span><span class="chip-remove">✕</span>`;
+    chip.querySelector('.chip-remove').addEventListener('click', () => removeRadical(char));
+    radicalChipsEl.appendChild(chip);
+  });
+}
+
+async function refreshResults() {
+  if (selectedRadicals.length === 0) {
+    radicalResultsEl.innerHTML = '';
+    return;
+  }
+  radicalResultsEl.innerHTML = '<div class="results-status">Searching…</div>';
+  try {
+    const res = await fetch(`/api/kanji/by-components?chars=${encodeURIComponent(selectedRadicals.join(','))}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    displayResults(await res.json());
+  } catch (err) {
+    radicalResultsEl.innerHTML = '<div class="results-status">Search failed</div>';
+    console.error('by-components search failed:', err);
+  }
+}
+
+function displayResults(results) {
+  radicalResultsEl.innerHTML = '';
+  if (results.length === 0) {
+    radicalResultsEl.innerHTML = '<div class="results-status">No matches</div>';
+    return;
+  }
+  results.forEach(r => {
+    const el = document.createElement('div');
+    el.className = 'candidate';
+    const meaning = (r.meanings && r.meanings[0]) || '';
+    el.innerHTML = `
+      <span class="candidate-char">${r.char}</span>
+      <span class="candidate-score">${meaning}</span>
+    `;
+    el.addEventListener('click', () => {
+      confirmedEl.textContent += r.char;
+      selectedRadicals = [];
+      renderChips();
+      radicalResultsEl.innerHTML = '';
+    });
+    radicalResultsEl.appendChild(el);
+  });
+}
+
+radicalGridToggleBtn.addEventListener('click', async () => {
+  if (!radicalGridEl.hidden) {
+    radicalGridEl.hidden = true;
+    radicalGridToggleBtn.textContent = 'Show radical list';
+    return;
+  }
+  if (!radicalsList) {
+    try {
+      const res = await fetch('/api/radicals');
+      radicalsList = await res.json();
+      radicalGridEl.innerHTML = '';
+      radicalsList.forEach(r => {
+        const btn = document.createElement('button');
+        btn.className = 'radical-btn';
+        btn.textContent = r.char;
+        btn.title = `#${r.number} ${r.name}`;
+        btn.addEventListener('click', () => addRadical(r.char));
+        radicalGridEl.appendChild(btn);
+      });
+    } catch (err) {
+      console.error('Failed to load radicals:', err);
+      return;
+    }
+  }
+  radicalGridEl.hidden = false;
+  radicalGridToggleBtn.textContent = 'Hide radical list';
+});
 
 // --- Drawing ---
 
@@ -273,8 +492,12 @@ function runRecognition() {
   statusEl.textContent = 'Recognizing…';
   candidatesEl.innerHTML = '';
 
-  const candidates = recognize(strokes, db, 12);
-  displayCandidates(candidates);
+  const candidates = recognize(strokes, db, mode === 'radical' ? 8 : 12);
+  if (mode === 'radical') {
+    displayRadicalCandidates(candidates);
+  } else {
+    displayCandidates(candidates);
+  }
   statusEl.textContent = `${candidates.length} candidates`;
 }
 
@@ -288,6 +511,23 @@ function displayCandidates(candidates) {
       <span class="candidate-score">${c.score.toFixed(1)}</span>
     `;
     el.addEventListener('click', () => confirmChar(c.char, el));
+    candidatesEl.appendChild(el);
+  });
+}
+
+function displayRadicalCandidates(candidates) {
+  candidatesEl.innerHTML = '';
+  candidates.forEach(c => {
+    const el = document.createElement('div');
+    el.className = 'candidate';
+    el.innerHTML = `
+      <span class="candidate-char">${c.char}</span>
+      <span class="candidate-score">${c.score.toFixed(1)}</span>
+    `;
+    el.addEventListener('click', () => {
+      addRadical(c.char);
+      clearCanvas();
+    });
     candidatesEl.appendChild(el);
   });
 }
@@ -309,7 +549,9 @@ function clearCanvas() {
   currentStroke = [];
   clearTimeout(recognizeTimer);
   candidatesEl.innerHTML = '';
-  statusEl.textContent = 'Draw a character';
+  statusEl.textContent = mode === 'radical'
+    ? 'Draw or pick a radical'
+    : (db ? 'Draw a character' : 'Loading database…');
   strokeCountEl.textContent = '0 strokes';
 }
 </script>

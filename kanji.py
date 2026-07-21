@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from sqlalchemy import inspect, text
+from sqlalchemy import bindparam, inspect, text
 from sqlalchemy.engine import Engine
 
 DATA_DIR = Path("data/dictionary")
@@ -213,3 +213,68 @@ def lookup(engine: Engine, char: str) -> dict | None:
         return None
     data = json.loads(row[0])
     return {"char": char, **data}
+
+
+# KRADFILE decomposes kanji using only JIS X 0208 characters, so radicals not
+# in that codeset are represented by a stand-in kanji that contains them (e.g.
+# the "water" radical isn't itself in JIS X 0208, so 汁 stands in for it —
+# see the comment header of data/dictionary/kradfile). The compact radical
+# glyphs a user would actually draw (氵, 忄, 扌, 辶, 艹 — also present as their
+# own standalone characters, and thus recognizable by the DTW handwriting
+# matcher) are different Unicode code points from those stand-ins, so a drawn
+# radical needs translating to its KRADFILE stand-in before it'll match any
+# component data. Verified empirically against kradfile (e.g. 河 contains 汁,
+# 情 contains 忙, 持 contains 扎, 近/道 contain 込, 花/草 contain 艾).
+_RADICAL_VARIANT_ALIASES: dict[str, str] = {
+    "氵": "汁",
+    "忄": "忙",
+    "扌": "扎",
+    "辶": "込",
+    "艹": "艾",
+}
+
+_component_index: dict[str, set[str]] | None = None
+
+
+def build_component_index(engine: Engine) -> None:
+    """One-time reverse index: component/radical char -> set of kanji chars
+    that contain it (per KRADFILE), used by search_by_components() to let a
+    user narrow a kanji search by the pieces they can see/draw rather than
+    the whole character."""
+    global _component_index
+    index: dict[str, set[str]] = {}
+    with engine.connect() as conn:
+        rows = conn.execute(text("SELECT char, data FROM kanji_entries")).all()
+    for char, data_json in rows:
+        data = json.loads(data_json)
+        for comp in data.get("components", []):
+            index.setdefault(comp, set()).add(char)
+    _component_index = index
+
+
+def search_by_components(engine: Engine, chars: list[str], limit: int = 300) -> list[dict]:
+    """Kanji containing ALL of the given component chars, sorted by stroke
+    count then frequency. Returns [] if any component is unknown or the
+    intersection is empty."""
+    if _component_index is None:
+        build_component_index(engine)
+    if not chars:
+        return []
+
+    chars = [_RADICAL_VARIANT_ALIASES.get(c, c) for c in chars]
+    sets = [_component_index.get(c, set()) for c in chars]
+    matches = set.intersection(*sets) if all(sets) else set()
+    if not matches:
+        return []
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT char, data FROM kanji_entries WHERE char IN :chars").bindparams(
+                bindparam("chars", expanding=True)
+            ),
+            {"chars": list(matches)},
+        ).all()
+
+    results = [{"char": char, **json.loads(data_json)} for char, data_json in rows]
+    results.sort(key=lambda d: (d.get("stroke_count") or 99, d.get("freq") or 9999))
+    return results[:limit]
