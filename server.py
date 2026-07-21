@@ -27,6 +27,7 @@ from sqlalchemy.orm import DeclarativeBase, Session
 
 import ctd
 import dictionary
+import kanji
 import kanjivg_db
 import reading_order
 
@@ -433,6 +434,12 @@ async def lifespan(app: FastAPI):
     except FileNotFoundError as e:
         print(f"[dictionary] {e}")
         print("[dictionary] Dictionary lookups will return 503 until the setup scripts are run.")
+
+    try:
+        await asyncio.to_thread(kanji.build_db, engine)
+    except FileNotFoundError as e:
+        print(f"[kanji] {e}")
+        print("[kanji] Kanji lookups will return 503 until setup_kanjidic.py is run.")
 
     kvg_db = await asyncio.to_thread(kanjivg_db.load_database)
     if not DB_JSON_PATH.exists():
@@ -941,6 +948,31 @@ def dict_lookup(lemma: str | None = None, surface: str | None = None, reading: s
     if not any([lemma, surface, reading]):
         raise HTTPException(400, "Provide at least one of lemma, surface, reading")
     return dictionary.lookup(engine, lemma=lemma, surface=surface, reading=reading)
+
+
+@app.get("/api/kanji/{char}")
+def kanji_lookup(char: str):
+    if not kanji.is_ready(engine):
+        raise HTTPException(503, "Kanji data not loaded — run setup_kanjidic.py")
+    data = kanji.lookup(engine, char)
+    if data is None:
+        raise HTTPException(404, "No KANJIDIC2 entry for this character")
+    return data
+
+
+@app.get("/api/kanji/{char}/svg")
+def kanji_svg(char: str):
+    """Raw KanjiVG stroke-order SVG — served as-is (not the DTW-normalized point
+    arrays in static/db.json, which stretch each axis independently to fill [0,1]
+    and so distort proportions for thin/simple strokes like 一) so the frontend
+    can animate strokes at their true visual proportions."""
+    try:
+        path = kanjivg_db.DATA_DIR / f"{ord(char):05x}.svg"
+    except TypeError:
+        raise HTTPException(404, "No stroke data for this character")
+    if not path.exists():
+        raise HTTPException(404, "No stroke data for this character")
+    return FileResponse(path, media_type="image/svg+xml")
 
 
 @app.post("/api/word-occurrences/{occurrence_id}/resolve")

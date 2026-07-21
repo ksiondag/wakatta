@@ -99,9 +99,23 @@ Primary machine: 4090 GPU, Arch Linux. Also runs on Framework 12 (CPU-only, slow
   span (`POST /api/segmentation-overrides`) and applied in `dictionary.tokenize()` on top of
   Unidic's analysis, so it's fixed for every future occurrence of that text — the fix is
   also applied retroactively to every existing sentence containing the corrected span
-- The panel/tab system is a small descriptor array in `reader.html` (`dictPanels`) — a
-  future Kanji panel (radicals/stroke order, reusing `kanjivg_db.py`) is one more entry,
-  no redesign needed
+- The panel/tab system is a small descriptor array in `reader.html` (`dictPanels`) — the
+  Kanji panel (see below) is implemented as one more entry, no redesign needed
+
+### Kanji Lookup (`kanji.py` + `static/reader.html`)
+- KANJIDIC2 (readings, English meanings, grade, JLPT, frequency, classical radical number)
+  and KRADFILE (per-kanji component/radical breakdown) imported once into `data/wakatta.db`
+  at first server start (`kanji.build_db()`) — a single raw-SQL `kanji_entries` table, same
+  decoupled-from-ORM convention as `dictionary.py`'s tables
+- The dictionary popover's "漢字" tab (`dictPanels` in `reader.html`) extracts every unique
+  kanji in the clicked word's surface form and fetches `GET /api/kanji/{char}` for each,
+  showing on'yomi/kun'yomi readings, meanings, classical radical (char + name, from a
+  hardcoded 214-entry Kangxi radical table), and full component breakdown per character
+- **Stroke order** is rendered by fetching the raw KanjiVG SVG (`GET /api/kanji/{char}/svg`)
+  and animating its strokes in drawing order client-side (stroke-dasharray reveal) —
+  deliberately *not* reusing the DTW-normalized point arrays in `static/db.json`/`kwDb`,
+  since those stretch each axis independently to fill `[0,1]` for stroke-matching purposes
+  and visually distort simple/thin strokes (e.g. 一 renders as a diagonal line)
 
 ### Handwriting Recognition Webapp (`server.py` + `static/index.html`)
 - FastAPI server loads KanjiVG stroke database on startup, generates `static/db.json`
@@ -156,9 +170,13 @@ uv run setup_kanjivg.py
 uv run setup_jmdict.py
 uv run setup_pitch_accents.py
 
-# 4. Start the server
+# 4. Download kanji data (KANJIDIC2 + KRADFILE)
+uv run setup_kanjidic.py
+
+# 5. Start the server
 #    On first start, downloads manga-ocr weights (~444 MB) and the CTD ONNX model (~50 MB),
-#    and imports JMdict (~220k entries) into data/wakatta.db (~20s, one-time)
+#    and imports JMdict (~220k entries) and KANJIDIC2 (~13k entries) into data/wakatta.db
+#    (~20s, one-time)
 uv run uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
@@ -194,14 +212,15 @@ Work                              ← implemented
                     │     unambiguous, else user-picked; per-occurrence, not
                     │     per-word, since homographs can differ by sentence)
                     └── Word (canonical entry, deduplicated by lemma+reading)     ← implemented
-                          └── KanjiComponent (per kanji in the word)              [not yet implemented]
-                                ├── radicals (from KANJIDIC2/KRADFILE)
-                                └── stroke order (from KanjiVG)
 
 DictEntry / PitchAccent          ← implemented (raw-SQL reference tables in data/wakatta.db,
                                      bulk-imported from JMdict + Kanjium; joined to
                                      WordOccurrence by id/surface string, no formal FK — see
                                      dictionary.py)
+KanjiEntry                       ← implemented (raw-SQL reference table in data/wakatta.db,
+                                     bulk-imported from KANJIDIC2 + KRADFILE, keyed by the
+                                     character itself; looked up live per kanji in a word's
+                                     surface form, no formal FK — see kanji.py)
 SegmentationOverride              ← implemented (user-defined tokenizer corrections, keyed by
                                      literal text span — see dictionary.py's tokenize())
 ```
@@ -276,9 +295,6 @@ SegmentationOverride              ← implemented (user-defined tokenizer correc
 - [ ] **Rich pitch-accent rendering** — currently raw pattern numbers; a future version should
       draw the accent line over/under each mora (heiban/atamadaka/nakadaka/odaka), the
       convention used by Yomichan/OJAD
-- [ ] **Kanji panel** — reuse `kanjivg_db.py` stroke data (already available client-side via
-      `static/db.json`) plus a new KANJIDIC2 import for radicals; add as one more `dictPanels`
-      descriptor
 - [ ] **Trust-weighted coverage/recommendation** — `WordOccurrence.source` (`ocr` vs `user`)
       already distinguishes auto-OCR text from human-confirmed text; a future Study Coverage
       Engine could estimate "likely known words" even on unconfirmed OCR-only pages, trusting
@@ -308,8 +324,9 @@ SegmentationOverride              ← implemented (user-defined tokenizer correc
       work
 
 ### Kanji
-- [ ] **KANJIDIC2 integration** — radical breakdown per kanji character
-- [ ] **Animated stroke order** — render KanjiVG SVG strokes sequentially in the UI
+- [x] **KANJIDIC2 integration** — radical breakdown per kanji character, see Kanji Lookup above
+- [x] **Animated stroke order** — KanjiVG SVG strokes revealed sequentially in the UI, see
+      Kanji Lookup above
 - [ ] **Stroke validation** — reuse DTW for practice checking (order, direction, shape)
 
 ### GPU

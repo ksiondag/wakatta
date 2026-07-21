@@ -292,6 +292,25 @@ input:focus { outline: none; border-color: #7070cc; }
 .dict-other-meanings { margin-top: 8px; padding-top: 8px; border-top: 1px solid #333; }
 .dict-other-meanings-label { color: #777; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
 
+/* ── Kanji panel ── */
+.kanji-card {
+  padding: 8px 0; margin: 4px 0; border-top: 1px solid #333;
+}
+.kanji-card:first-child { border-top: none; margin-top: 0; }
+.kanji-card-head { display: flex; align-items: baseline; gap: 12px; }
+.kanji-char { font-size: 2.2rem; line-height: 1; }
+.kanji-readings { display: flex; flex-direction: column; gap: 2px; }
+.kanji-on { color: #ddd; font-size: 0.9rem; }
+.kanji-kun { color: #a8a8dd; font-size: 0.9rem; }
+.kanji-meanings { margin: 6px 0; font-size: 0.85rem; line-height: 1.4; }
+.kanji-radical, .kanji-components { color: #999; font-size: 0.8rem; margin: 3px 0; }
+.kanji-radical-char { color: #ddd; font-size: 0.95rem; }
+.kanji-meta { color: #777; font-size: 0.75rem; margin: 4px 0; }
+.kanji-stroke-wrap { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.kanji-stroke-svg-wrap { width: 90px; height: 90px; background: #16162a; border: 1px solid #333; border-radius: 6px; }
+.kanji-stroke-svg-wrap svg { width: 100%; height: 100%; display: block; }
+.kanji-replay-btn { padding: 4px 10px; font-size: 0.75rem; }
+
 @media (max-width: 700px) {
   .reader-main { flex-direction: column; }
   .hw-panel { width: 100%; border-left: none; border-top: 1px solid #2a2a44; }
@@ -1240,9 +1259,8 @@ prevRegBtnEl.addEventListener('click', () => { if (activeIdx > 0) selectRegion(a
 nextRegBtnEl.addEventListener('click', () => { if (activeIdx < sentences.length - 1) selectRegion(activeIdx + 1); });
 
 // ── Dictionary lookup ────────────────────────────────────────────────────────────
-// Extensible panel descriptor array — a future Kanji panel (reusing kwDb, already
-// loaded client-side for handwriting recognition) is added by appending one more
-// object here; nothing else in this section needs to change.
+// Extensible panel descriptor array — each entry is {id, label, fetch(tok),
+// render(data, tok)}; adding a panel is just appending one more object below.
 
 function renderCandidate(c, tok, isChosen) {
   const pitch = c.pitch_accents && c.pitch_accents.length
@@ -1255,6 +1273,102 @@ function renderCandidate(c, tok, isChosen) {
   el.innerHTML = `<div class="dict-candidate-head">${c.kanji_forms[0] || c.kana_forms[0] || ''}` +
     `<span class="dict-candidate-kana">${c.kana_forms.join('、')}</span></div>${pitch}${senses}`;
   el.addEventListener('click', () => resolveOccurrence(tok, c.entry_id));
+  return el;
+}
+
+// Animates a KanjiVG SVG's strokes in drawing order using the standard
+// stroke-dasharray/dashoffset reveal trick — this operates on the raw SVG
+// (correct visual proportions) rather than the DTW-normalized point arrays in
+// kwDb/db.json, which stretch each axis independently to fill [0,1] and so
+// visually distort thin/simple strokes (e.g. 一 comes out looking diagonal).
+function animateKanjiStrokes(svg, strokeDelayMs = 450) {
+  const paths = [...svg.querySelectorAll('path')];
+  paths.forEach(p => {
+    const len = p.getTotalLength();
+    p.style.transition = 'none';
+    p.style.strokeDasharray = `${len}`;
+    p.style.strokeDashoffset = `${len}`;
+  });
+  void svg.getBoundingClientRect(); // force reflow so the 'none' transition above applies first
+  paths.forEach((p, i) => {
+    setTimeout(() => {
+      p.style.transition = `stroke-dashoffset ${strokeDelayMs * 0.8}ms ease-in-out`;
+      p.style.strokeDashoffset = '0';
+    }, i * strokeDelayMs);
+  });
+}
+
+async function loadKanjiStrokeSvg(char, container) {
+  container.innerHTML = '<div class="dict-loading">Loading…</div>';
+  let svgText;
+  try {
+    const res = await fetch(`/api/kanji/${encodeURIComponent(char)}/svg`);
+    if (!res.ok) { container.innerHTML = ''; return; }
+    svgText = await res.text();
+  } catch {
+    container.innerHTML = '';
+    return;
+  }
+  // KanjiVG files carry an XML DOCTYPE with an internal DTD subset (<!ATTLIST ...>
+  // declarations for the kvg: attributes) — innerHTML runs the HTML parser, not an
+  // XML parser, which doesn't understand that syntax and leaves stray text (e.g. a
+  // literal "]>") in the DOM. None of that is needed to render/query the SVG, so
+  // just start from the <svg> tag itself.
+  container.innerHTML = svgText.slice(svgText.indexOf('<svg'));
+  const svg = container.querySelector('svg');
+  if (!svg) return;
+  svg.classList.add('kanji-stroke-svg');
+  svg.querySelectorAll('path').forEach(p => { p.style.stroke = '#e8e8ff'; });
+  animateKanjiStrokes(svg);
+}
+
+function renderKanjiCard(char, data) {
+  const el = document.createElement('div');
+  el.className = 'kanji-card';
+  if (!data) {
+    el.innerHTML = `<div class="kanji-card-head"><div class="kanji-char">${char}</div></div>` +
+      '<div class="dict-empty">No dictionary entry for this character.</div>';
+    return el;
+  }
+
+  const on = (data.on || []).join('、');
+  const kun = (data.kun || []).join('、');
+  const meanings = (data.meanings || []).join(', ');
+  const radical = data.radical?.char
+    ? `<div class="kanji-radical">Radical: <span class="kanji-radical-char">${data.radical.char}</span> ${data.radical.name || ''} (#${data.radical.number})</div>`
+    : '';
+  const components = (data.components || []).filter(c => c !== data.radical?.char);
+  const componentsHtml = components.length
+    ? `<div class="kanji-components">Components: ${components.join(' ')}</div>` : '';
+  const meta = [
+    data.grade ? `Grade ${data.grade}` : null,
+    data.jlpt ? `JLPT N${data.jlpt}` : null,
+    data.stroke_count ? `${data.stroke_count} strokes` : null,
+    data.freq ? `Freq #${data.freq}` : null,
+  ].filter(Boolean).join(' · ');
+
+  el.innerHTML = `
+    <div class="kanji-card-head">
+      <div class="kanji-char">${char}</div>
+      <div class="kanji-readings">
+        ${on ? `<div class="kanji-on">${on}</div>` : ''}
+        ${kun ? `<div class="kanji-kun">${kun}</div>` : ''}
+      </div>
+    </div>
+    ${meanings ? `<div class="kanji-meanings">${meanings}</div>` : ''}
+    ${radical}
+    ${componentsHtml}
+    ${meta ? `<div class="kanji-meta">${meta}</div>` : ''}
+    <div class="kanji-stroke-wrap">
+      <div class="kanji-stroke-svg-wrap"></div>
+      <button type="button" class="kanji-replay-btn">Replay</button>
+    </div>
+  `;
+
+  const svgWrap = el.querySelector('.kanji-stroke-svg-wrap');
+  const replayBtn = el.querySelector('.kanji-replay-btn');
+  loadKanjiStrokeSvg(char, svgWrap);
+  replayBtn.addEventListener('click', () => loadKanjiStrokeSvg(char, svgWrap));
   return el;
 }
 
@@ -1311,7 +1425,27 @@ const dictPanels = [
     async fetch() { return null; },
     render() { return '<div class="dict-empty">Japanese-Japanese definitions — coming soon.</div>'; },
   },
-  // future: { id: 'kanji', label: 'Kanji', fetch(tok) {...}, render(data, tok) {...} }
+  {
+    id: 'kanji', label: '漢字',
+    async fetch(tok) {
+      const chars = [...new Set([...tok.surface].filter(c => /\p{Script=Han}/u.test(c)))];
+      return Promise.all(chars.map(async char => {
+        try {
+          const res = await fetch(`/api/kanji/${encodeURIComponent(char)}`);
+          return { char, data: res.ok ? await res.json() : null };
+        } catch {
+          return { char, data: null };
+        }
+      }));
+    },
+    render(entries) {
+      if (!entries) return '<div class="dict-empty">Kanji data unavailable.</div>';
+      if (!entries.length) return '<div class="dict-empty">No kanji in this word.</div>';
+      const container = document.createElement('div');
+      entries.forEach(({ char, data }) => container.appendChild(renderKanjiCard(char, data)));
+      return container;
+    },
+  },
 ];
 
 let currentSentenceId = null;
