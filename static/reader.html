@@ -1098,7 +1098,7 @@ function handleMergeSelectDown(e) {
   previewEl.setAttribute('x', start.x); previewEl.setAttribute('y', start.y);
   previewEl.setAttribute('width', 0); previewEl.setAttribute('height', 0);
   bboxSvgEl.appendChild(previewEl);
-  mergeDrag = { start, previewEl, dragged: false };
+  mergeDrag = { start, previewEl, dragged: false, pointerId: e.pointerId };
 
   window.addEventListener('pointermove', handleMergeSelectMove);
   window.addEventListener('pointerup', handleMergeSelectUp);
@@ -1106,7 +1106,7 @@ function handleMergeSelectDown(e) {
 }
 
 function handleMergeSelectMove(e) {
-  if (!mergeDrag) return;
+  if (!mergeDrag || e.pointerId !== mergeDrag.pointerId) return;
   const p = clientToSvg(e.clientX, e.clientY);
   const dx = p.x - mergeDrag.start.x, dy = p.y - mergeDrag.start.y;
   if (Math.abs(dx) > 2 || Math.abs(dy) > 2) mergeDrag.dragged = true;
@@ -1119,7 +1119,7 @@ function handleMergeSelectMove(e) {
 }
 
 function handleMergeSelectUp(e) {
-  if (!mergeDrag) return;
+  if (!mergeDrag || e.pointerId !== mergeDrag.pointerId) return;
   window.removeEventListener('pointermove', handleMergeSelectMove);
   window.removeEventListener('pointerup', handleMergeSelectUp);
   window.removeEventListener('pointercancel', handleMergeSelectUp);
@@ -1225,7 +1225,7 @@ function handleReorderSelectDown(e) {
   previewEl.setAttribute('x', start.x); previewEl.setAttribute('y', start.y);
   previewEl.setAttribute('width', 0); previewEl.setAttribute('height', 0);
   bboxSvgEl.appendChild(previewEl);
-  reorderDrag = { start, previewEl, dragged: false };
+  reorderDrag = { start, previewEl, dragged: false, pointerId: e.pointerId };
 
   window.addEventListener('pointermove', handleReorderSelectMove);
   window.addEventListener('pointerup', handleReorderSelectUp);
@@ -1233,7 +1233,7 @@ function handleReorderSelectDown(e) {
 }
 
 function handleReorderSelectMove(e) {
-  if (!reorderDrag) return;
+  if (!reorderDrag || e.pointerId !== reorderDrag.pointerId) return;
   const p = clientToSvg(e.clientX, e.clientY);
   const dx = p.x - reorderDrag.start.x, dy = p.y - reorderDrag.start.y;
   if (Math.abs(dx) > 2 || Math.abs(dy) > 2) reorderDrag.dragged = true;
@@ -1246,7 +1246,7 @@ function handleReorderSelectMove(e) {
 }
 
 function handleReorderSelectUp(e) {
-  if (!reorderDrag) return;
+  if (!reorderDrag || e.pointerId !== reorderDrag.pointerId) return;
   window.removeEventListener('pointermove', handleReorderSelectMove);
   window.removeEventListener('pointerup', handleReorderSelectUp);
   window.removeEventListener('pointercancel', handleReorderSelectUp);
@@ -1387,19 +1387,20 @@ let linkDrag = null;       // { start: {x,y}, dragged } — only used to tell a 
 
 function handleLinkSelectDown(e) {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
-  linkDrag = { start: clientToSvg(e.clientX, e.clientY), dragged: false };
+  linkDrag = { start: clientToSvg(e.clientX, e.clientY), dragged: false, pointerId: e.pointerId };
   window.addEventListener('pointermove', handleLinkSelectMove);
   window.addEventListener('pointerup', handleLinkSelectUp);
   window.addEventListener('pointercancel', handleLinkSelectCancel);
 }
 
 function handleLinkSelectMove(e) {
-  if (!linkDrag) return;
+  if (!linkDrag || e.pointerId !== linkDrag.pointerId) return;
   const p = clientToSvg(e.clientX, e.clientY);
   if (Math.abs(p.x - linkDrag.start.x) > 2 || Math.abs(p.y - linkDrag.start.y) > 2) linkDrag.dragged = true;
 }
 
-function handleLinkSelectCancel() {
+function handleLinkSelectCancel(e) {
+  if (e && linkDrag && e.pointerId !== linkDrag.pointerId) return;
   window.removeEventListener('pointermove', handleLinkSelectMove);
   window.removeEventListener('pointerup', handleLinkSelectUp);
   window.removeEventListener('pointercancel', handleLinkSelectCancel);
@@ -1407,7 +1408,7 @@ function handleLinkSelectCancel() {
 }
 
 async function handleLinkSelectUp(e) {
-  if (!linkDrag) return;
+  if (!linkDrag || e.pointerId !== linkDrag.pointerId) return;
   const { start, dragged } = linkDrag;
   handleLinkSelectCancel();
   if (dragged) return; // a pinch/pan-style gesture, not a box pick
@@ -1554,19 +1555,25 @@ toggleBoxesBtnEl.addEventListener('click', () => {
   applyBoxesVisibility();
 });
 
+// Deliberately avoids SVGGraphicsElement.getScreenCTM(): WebKit (Safari and
+// iOS Chrome, which is WebKit under the hood) has a long-standing bug where it
+// ignores CSS transforms on ancestor elements — https://bugs.webkit.org/show_bug.cgi?id=209220
+// — so getScreenCTM() returns the wrong matrix whenever #image-container is
+// scaled (i.e. whenever the page is zoomed). getBoundingClientRect() isn't
+// affected and correctly reflects the ancestor's CSS transform on every engine.
 function clientToSvg(clientX, clientY) {
-  const ctm = bboxSvgEl.getScreenCTM();
-  if (!ctm) return { x: 0, y: 0 };
-  const pt = bboxSvgEl.createSVGPoint();
-  pt.x = clientX; pt.y = clientY;
-  const p = pt.matrixTransform(ctm.inverse());
-  return { x: p.x, y: p.y };
+  const rect = bboxSvgEl.getBoundingClientRect();
+  if (!rect.width || !rect.height) return { x: 0, y: 0 };
+  return {
+    x: (clientX - rect.left) * (pageData.width / rect.width),
+    y: (clientY - rect.top) * (pageData.height / rect.height),
+  };
 }
 
 function svgUnitsPerScreenPx() {
-  const ctm = bboxSvgEl.getScreenCTM();
-  if (!ctm) return 1;
-  return 1 / Math.hypot(ctm.a, ctm.b);
+  const rect = bboxSvgEl.getBoundingClientRect();
+  if (!rect.width) return 1;
+  return pageData.width / rect.width;
 }
 
 function updateRectEl(idx) {
@@ -1627,14 +1634,14 @@ function handleEditPointerDown(e) {
   if (hit) {
     if (hit.reselect) selectRegion(hit.idx);
     const s = sentences[hit.idx];
-    editAction = { ...hit, orig: { x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2 }, start: p };
+    editAction = { ...hit, orig: { x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2 }, start: p, pointerId: e.pointerId };
   } else {
     const preview = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
     preview.setAttribute('class', 'draw-preview');
     preview.setAttribute('x', p.x); preview.setAttribute('y', p.y);
     preview.setAttribute('width', 0); preview.setAttribute('height', 0);
     bboxSvgEl.appendChild(preview);
-    editAction = { type: 'draw', start: p, previewEl: preview };
+    editAction = { type: 'draw', start: p, previewEl: preview, pointerId: e.pointerId };
   }
 
   window.addEventListener('pointermove', handleEditPointerMove);
@@ -1642,8 +1649,11 @@ function handleEditPointerDown(e) {
   window.addEventListener('pointercancel', handleEditPointerUp);
 }
 
+// Only the pointer that started the gesture may drive it — otherwise a palm
+// resting on the screen in Touch+Pen mode (routed to pan/zoom) can still
+// inject pointermove/pointerup events here and hijack an in-progress pen edit.
 function handleEditPointerMove(e) {
-  if (!editAction) return;
+  if (!editAction || e.pointerId !== editAction.pointerId) return;
   const p = clientToSvg(e.clientX, e.clientY);
   const dx = p.x - editAction.start.x;
   const dy = p.y - editAction.start.y;
@@ -2347,7 +2357,7 @@ radicalGridToggleBtn.addEventListener('click', async () => {
 
 // ── Handwriting ────────────────────────────────────────────────────────────────
 
-let strokes = [], currentStroke = [], drawing = false, recogTimer = null;
+let strokes = [], currentStroke = [], drawing = false, recogTimer = null, drawingPointerId = null;
 
 function getPos(e) {
   const r = hwCanvasEl.getBoundingClientRect();
@@ -2361,19 +2371,19 @@ function getPos(e) {
 hwCanvasEl.addEventListener('pointerdown', e => {
   if (activeIdx === null) return;
   if (touchMode && e.pointerType === 'touch') return; // touch mode: only the pen draws here
-  e.preventDefault(); drawing = true; currentStroke = [];
+  e.preventDefault(); drawing = true; drawingPointerId = e.pointerId; currentStroke = [];
   const pt = getPos(e); currentStroke.push(pt);
   hwCtx.beginPath(); hwCtx.moveTo(pt.x, pt.y);
   clearTimeout(recogTimer); hwStatEl.textContent = 'Drawing…';
 });
 hwCanvasEl.addEventListener('pointermove', e => {
-  if (!drawing) return; e.preventDefault();
+  if (!drawing || e.pointerId !== drawingPointerId) return; e.preventDefault();
   const pt = getPos(e); currentStroke.push(pt);
   hwCtx.lineTo(pt.x, pt.y); hwCtx.stroke();
   hwCtx.beginPath(); hwCtx.moveTo(pt.x, pt.y);
 });
 hwCanvasEl.addEventListener('pointerup', e => {
-  if (!drawing) return; drawing = false;
+  if (!drawing || e.pointerId !== drawingPointerId) return; drawing = false;
   if (currentStroke.length >= 2) {
     strokes.push(currentStroke);
     strokeCntEl.textContent = `${strokes.length} stroke${strokes.length !== 1 ? 's' : ''}`;
@@ -2382,7 +2392,7 @@ hwCanvasEl.addEventListener('pointerup', e => {
   clearTimeout(recogTimer); recogTimer = setTimeout(runRecognition, 700);
 });
 hwCanvasEl.addEventListener('pointerleave', e => {
-  if (drawing) hwCanvasEl.dispatchEvent(new PointerEvent('pointerup', e));
+  if (drawing && e.pointerId === drawingPointerId) hwCanvasEl.dispatchEvent(new PointerEvent('pointerup', e));
 });
 hwCanvasEl.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
 hwCanvasEl.addEventListener('touchmove',  e => e.preventDefault(), { passive: false });
