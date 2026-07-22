@@ -1,6 +1,7 @@
 """Handwriting recognition server + page ingestion pipeline."""
 
 import asyncio
+import base64
 import io
 import json
 import traceback
@@ -14,6 +15,7 @@ from pathlib import Path
 import cv2
 import fitz
 import fugashi
+import httpx
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
@@ -38,6 +40,14 @@ PAGES_DIR = Path("data/pages")
 UPLOADS_DIR = Path("data/uploads")
 DB_JSON_PATH = Path("static/db.json")
 DPI = 600
+
+# Local vision model fallback (see /home/silk/Projects/LocalLLMsSetup) for when
+# manga-ocr fails and handwriting it in is impractical — hits the same Ollama
+# daemon `pi` uses, directly over its OpenAI-compatible endpoint. gemma4:26b is
+# the one confirmed (in that project's notes) to actually engage with embedded
+# manga text rather than ignore it; 12b is faster but was observed skipping it.
+OLLAMA_BASE_URL = "http://localhost:11434/v1"
+VISION_MODEL = "gemma4:26b"
 
 
 # ── SQLAlchemy models ──────────────────────────────────────────────────────────
@@ -340,6 +350,55 @@ async def _ocr_region(page_id: int, x1: int, y1: int, x2: int, y2: int) -> str |
         crop = crop_region(page_image, x1, y1, x2, y2)
         text = await asyncio.to_thread(mocr, crop)
         return text.strip() or None
+
+
+_VISION_PROMPT = (
+    "This is a cropped panel from a Japanese manga page. Automatic OCR failed to "
+    "read the text in it. Transcribe exactly the Japanese text visible in the "
+    "image, character for character, preserving line breaks. Reply with only the "
+    "transcribed text — no translation, no romaji, no commentary, no quotes. If "
+    "there is no legible text, reply with exactly: (none)"
+)
+
+
+async def _ask_vision_model(page_id: int, x1: int, y1: int, x2: int, y2: int) -> str:
+    """Crop a region of a stored page PNG and ask a local vision-capable model
+    (via Ollama, see LocalLLMsSetup) to transcribe it — a fallback for OCR misses
+    where handwriting the text in is impractical. Not auto-saved; the caller
+    shows this as a suggestion for the user to review/edit before saving."""
+    img_path = PAGES_DIR / f"{page_id}.png"
+    if not img_path.exists():
+        raise HTTPException(404, "Page image not found")
+
+    page_image = await asyncio.to_thread(Image.open, img_path)
+    crop = crop_region(page_image, x1, y1, x2, y2)
+    buf = io.BytesIO()
+    crop.save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+    try:
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            resp = await client.post(
+                f"{OLLAMA_BASE_URL}/chat/completions",
+                json={
+                    "model": VISION_MODEL,
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": _VISION_PROMPT},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                        ],
+                    }],
+                    "temperature": 0.1,
+                },
+            )
+            resp.raise_for_status()
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Local vision model unreachable ({VISION_MODEL} via Ollama): {e}")
+
+    data = resp.json()
+    text = data["choices"][0]["message"]["content"].strip()
+    return "" if text == "(none)" else text
 
 
 async def _process_one_page(
@@ -911,6 +970,22 @@ async def update_sentence(sentence_id: int, update: SentenceUpdate):
             session.refresh(s)
 
     return _sentence_dict(s)
+
+
+@app.post("/api/sentences/{sentence_id}/ask-vision-model")
+async def ask_vision_model(sentence_id: int):
+    """One-shot fallback for a box manga-ocr got wrong: crop it and ask a local
+    vision model (Ollama/gemma4:26b) what the text says. Returns a suggestion for
+    the UI to show alongside the existing OCR text — doesn't touch the sentence
+    row itself; the user reviews/edits and saves via the normal update endpoint."""
+    with Session(engine) as session:
+        s = session.get(Sentence, sentence_id)
+        if s is None:
+            raise HTTPException(404, "Sentence not found")
+        page_id, x1, y1, x2, y2 = s.page_id, s.x1, s.y1, s.x2, s.y2
+
+    text = await _ask_vision_model(page_id, x1, y1, x2, y2)
+    return {"text": text or None, "model": VISION_MODEL}
 
 
 @app.delete("/api/sentences/{sentence_id}", status_code=204)

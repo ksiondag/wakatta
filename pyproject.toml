@@ -8,6 +8,7 @@ dependencies = [
     "colorama>=0.4.6",
     "fastapi>=0.138.1",
     "fugashi[unidic]>=1.5.2",
+    "httpx>=0.28.1",
     "lxml>=6.1.1",
     "manga-ocr>=0.1.14",
     "opencv-python>=4.13.0.92",

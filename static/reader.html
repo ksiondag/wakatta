@@ -235,6 +235,10 @@ input:focus { outline: none; border-color: #7070cc; }
 #fix-words-btn { padding: 3px 8px; font-size: 0.75rem; }
 #fix-words-btn.active { background: #4a3a2a; border-color: #6a5a4a; color: #e0b090; }
 
+#ask-vision-btn { padding: 3px 8px; font-size: 0.75rem; }
+#vision-result-row span { display: flex; gap: 6px; align-items: baseline; }
+#vision-result-text { font-size: 1rem; letter-spacing: 0.06em; word-break: break-all; }
+
 .fix-words-bar {
   display: flex; align-items: center; gap: 10px; padding: 6px 0;
   font-size: 0.85rem; color: #ccc;
@@ -445,9 +449,14 @@ input:focus { outline: none; border-color: #7070cc; }
           </div>
           <div class="region-info-header">
             <div class="label" id="ocr-label">OCR (auto-detected)</div>
+            <button id="ask-vision-btn" title="OCR looks wrong here? Ask a local vision model (gemma4:26b via Ollama) to transcribe this box">🤖 Ask model</button>
             <button id="direction-toggle" title="Toggle vertical/horizontal text direction">↕ v</button>
           </div>
           <div id="ocr-text">—</div>
+          <div class="continuation-row" id="vision-result-row" hidden>
+            <span>🤖 <span id="vision-result-text"></span></span>
+            <button id="vision-use-btn" title="Copy this into Your text below">Use this →</button>
+          </div>
           <div class="continuation-row" id="continues-into-row" hidden>
             <span>⤵ continues into: <span id="continues-into-text"></span></span>
             <button id="unlink-btn" title="Remove this continuation link">🔗✕ Unlink</button>
@@ -626,6 +635,10 @@ const continuesFromTextEl  = document.getElementById('continues-from-text');
 const continuesIntoRowEl   = document.getElementById('continues-into-row');
 const continuesIntoTextEl  = document.getElementById('continues-into-text');
 const unlinkBtnEl          = document.getElementById('unlink-btn');
+const askVisionBtnEl       = document.getElementById('ask-vision-btn');
+const visionResultRowEl    = document.getElementById('vision-result-row');
+const visionResultTextEl   = document.getElementById('vision-result-text');
+const visionUseBtnEl       = document.getElementById('vision-use-btn');
 const ocrLabelEl       = document.getElementById('ocr-label');
 const directionToggleEl = document.getElementById('direction-toggle');
 
@@ -1488,6 +1501,42 @@ unlinkBtnEl.addEventListener('click', async () => {
   }
 });
 
+// ── Ask a local vision model ─────────────────────────────────────────────────────
+// Fallback for an OCR miss where handwriting the character in is impractical —
+// crops the box and asks a local Ollama-hosted vision model (see
+// POST /api/sentences/{id}/ask-vision-model) what it says. The reply is only a
+// suggestion, shown next to the OCR text; it's never saved automatically.
+
+askVisionBtnEl.addEventListener('click', async () => {
+  const s = sentences[activeIdx];
+  if (!s || !s.id) {
+    alert('This box must be saved (not pending) before asking the model.');
+    return;
+  }
+  askVisionBtnEl.disabled = true;
+  askVisionBtnEl.textContent = '🤖 Asking… (can take ~20s)';
+  visionResultRowEl.hidden = true;
+  try {
+    const res = await fetch(`/api/sentences/${s.id}/ask-vision-model`, { method: 'POST' });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    visionResultTextEl.textContent = data.text || '(model saw no legible text)';
+    visionResultRowEl.hidden = false;
+  } catch (err) {
+    alert('Asking the model failed: ' + err.message);
+  } finally {
+    askVisionBtnEl.disabled = false;
+    askVisionBtnEl.textContent = '🤖 Ask model';
+  }
+});
+
+visionUseBtnEl.addEventListener('click', () => {
+  const text = visionResultTextEl.textContent;
+  if (!text || text === '(model saw no legible text)') return;
+  userTextEl.value = text;
+  userTextEl.dispatchEvent(new Event('input'));
+});
+
 // ── Show/hide bounding boxes ────────────────────────────────────────────────────
 // A reading-convenience toggle, separate from edit mode — always shown while
 // editing regardless of this preference, since you need to see what you're editing.
@@ -1694,6 +1743,11 @@ function selectRegion(idx) {
   const intoDst = sentences.find(x => x.id === s.continues_into_id);
   continuesIntoRowEl.hidden = !intoDst;
   if (intoDst) continuesIntoTextEl.textContent = intoDst.user_text || intoDst.ocr_text || '—';
+
+  visionResultRowEl.hidden = true; // last box's model suggestion doesn't carry over
+  askVisionBtnEl.disabled = false;
+  askVisionBtnEl.textContent = '🤖 Ask model';
+
   userTextEl.value = s.user_text ?? '';
   directionToggleEl.textContent = s.direction === 'v' ? '↕ v' : '↔ h';
   saveStatEl.textContent = '';
