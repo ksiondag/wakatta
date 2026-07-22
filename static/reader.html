@@ -920,11 +920,29 @@ function setZoom(newScale) {
   applyTransform();
 }
 
+// Re-scales while keeping the image point that was under `prevAnchor` (screen
+// coords) fixed under `nextAnchor` — so zooming tracks the pinch midpoint /
+// cursor instead of always zooming toward the image's own center.
+function zoomAt(prevAnchor, nextAnchor, newScale) {
+  const rect = imagePanelEl.getBoundingClientRect();
+  const centerX = rect.left + rect.width / 2;
+  const centerY = rect.top + rect.height / 2;
+  const s0 = zoomScale;
+  const localX = (prevAnchor.x - centerX - panX) / s0;
+  const localY = (prevAnchor.y - centerY - panY) / s0;
+  zoomScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, newScale));
+  panX = nextAnchor.x - centerX - zoomScale * localX;
+  panY = nextAnchor.y - centerY - zoomScale * localY;
+  clampPan();
+  applyTransform();
+}
+
 imagePanelEl.addEventListener('wheel', e => {
   if (editMode) return;
   e.preventDefault();
   if (e.ctrlKey || e.metaKey) {
-    setZoom(zoomScale * Math.exp(-e.deltaY * 0.01));
+    const cursor = { x: e.clientX, y: e.clientY };
+    zoomAt(cursor, cursor, zoomScale * Math.exp(-e.deltaY * 0.01));
   } else {
     panX -= e.deltaX;
     panY -= e.deltaY;
@@ -938,9 +956,11 @@ document.getElementById('zoom-reset-btn').addEventListener('click', () => resetZ
 
 const activePointers = new Map();
 let pinchStartDist = 0, pinchStartScale = 1;
+let pinchLastMid = null;
 let dragStart = null;
 
 function pointerDist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+function pointerMid(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
 
 function onPointerMove(e) {
   if (!activePointers.has(e.pointerId)) return;
@@ -949,8 +969,10 @@ function onPointerMove(e) {
   if (activePointers.size >= 2) {
     const pts = [...activePointers.values()].slice(0, 2);
     const d = pointerDist(pts[0], pts[1]);
+    const mid = pointerMid(pts[0], pts[1]);
     if (pinchStartDist > 0) {
-      setZoom(pinchStartScale * (d / pinchStartDist));
+      zoomAt(pinchLastMid || mid, mid, pinchStartScale * (d / pinchStartDist));
+      pinchLastMid = mid;
       didDrag = true;
     }
   } else if (dragStart) {
@@ -972,11 +994,13 @@ function onPointerUp(e) {
     window.removeEventListener('pointercancel', onPointerUp);
     dragStart = null;
     pinchStartDist = 0;
+    pinchLastMid = null;
     if (!editMode) imageContainerEl.style.cursor = 'grab';
   } else if (activePointers.size === 1) {
     const [[, p]] = activePointers;
     dragStart = { x: p.x, y: p.y, panX, panY };
     pinchStartDist = 0;
+    pinchLastMid = null;
   }
 }
 
@@ -1002,6 +1026,7 @@ imagePanelEl.addEventListener('pointerdown', e => {
     const pts = [...activePointers.values()];
     pinchStartDist = pointerDist(pts[0], pts[1]);
     pinchStartScale = zoomScale;
+    pinchLastMid = pointerMid(pts[0], pts[1]);
   }
 });
 
