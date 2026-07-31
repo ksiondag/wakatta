@@ -266,16 +266,6 @@ input:focus { outline: none; border-color: #7070cc; }
   word-break: break-all; /* Japanese wraps anywhere; no words to keep whole */
 }
 #user-text:focus { outline: none; border-color: #7070cc; }
-/* Vertical boxes: match the page, so the transcription can be read against the
-   original without mentally rotating it. Lines run down a fixed-height column and
-   wrap leftward into new ones, so here it's the width that tracks the content. */
-#user-text.vertical {
-  writing-mode: vertical-rl;
-  flex: 0 0 auto;
-  height: 10rem; min-height: 0;
-  min-width: 2.4rem; max-width: 100%;
-}
-.user-text-row.vertical { align-items: flex-start; justify-content: flex-end; }
 #undo-char { padding: 6px 10px; font-size: 1rem; flex-shrink: 0; }
 
 .save-row { display: flex; align-items: center; gap: 8px; }
@@ -527,7 +517,7 @@ input:focus { outline: none; border-color: #7070cc; }
             </div>
           </div>
           <div class="label">Your text</div>
-          <div class="user-text-row" id="user-text-row">
+          <div class="user-text-row">
             <textarea id="user-text" rows="1" placeholder="Confirm characters below…"></textarea>
             <button id="undo-char" title="Remove last character">⌫</button>
           </div>
@@ -650,7 +640,6 @@ const fixWordsSaveEl     = document.getElementById('fix-words-save');
 const fixWordsEditorCancelEl = document.getElementById('fix-words-editor-cancel');
 const fixWordsStatusEl   = document.getElementById('fix-words-status');
 const userTextEl     = document.getElementById('user-text');
-const userTextRowEl  = document.getElementById('user-text-row');
 const undoBtnEl      = document.getElementById('undo-char');
 const saveBtnEl      = document.getElementById('save-btn');
 const deleteBtnEl    = document.getElementById('delete-btn');
@@ -1843,7 +1832,6 @@ function selectRegion(idx) {
   askVisionBtnEl.textContent = '🤖 Ask model';
 
   setUserText(s.user_text ?? '');
-  applyUserTextDirection();
   directionToggleEl.textContent = s.direction === 'v' ? '↕ v' : '↔ h';
   saveStatEl.textContent = '';
   clearCanvas();
@@ -2303,18 +2291,8 @@ dictPopoverCloseEl.addEventListener('click', closeDictPopover);
 
 function autoGrowUserText() {
   if (userTextEl.offsetParent === null) return; // hidden: scroll sizes read as 0
-  if (userTextEl.classList.contains('vertical')) {
-    userTextEl.style.height = ''; // fixed column height comes from CSS
-    // Collapse to the CSS min-width first: a textarea's auto width is its default
-    // ~20-column intrinsic size, which scrollWidth would report back instead of the
-    // content. The +4 covers trailing padding scrollWidth can omit.
-    userTextEl.style.width = '0px';
-    userTextEl.style.width = `${userTextEl.scrollWidth + 4}px`;
-  } else {
-    userTextEl.style.width = '';
-    userTextEl.style.height = 'auto';
-    userTextEl.style.height = `${userTextEl.scrollHeight}px`;
-  }
+  userTextEl.style.height = 'auto';
+  userTextEl.style.height = `${userTextEl.scrollHeight}px`;
 }
 
 function setUserText(value) {
@@ -2324,15 +2302,6 @@ function setUserText(value) {
 
 function appendUserChar(char) {
   setUserText(userTextEl.value + char);
-}
-
-function applyUserTextDirection() {
-  const vertical = sentences[activeIdx]?.direction === 'v';
-  userTextEl.classList.toggle('vertical', vertical);
-  userTextRowEl.classList.toggle('vertical', vertical);
-  userTextEl.style.height = '';
-  userTextEl.style.width = '';
-  autoGrowUserText();
 }
 
 // Wrapping depends on the panel's width, which changes when an iPad is rotated.
@@ -2383,7 +2352,6 @@ directionToggleEl.addEventListener('click', () => {
   const s = sentences[activeIdx];
   s.direction = s.direction === 'v' ? 'h' : 'v';
   directionToggleEl.textContent = s.direction === 'v' ? '↕ v' : '↔ h';
-  applyUserTextDirection();
   renderBoxes();
   syncSentence(activeIdx);
 });
