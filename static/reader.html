@@ -259,9 +259,24 @@ input:focus { outline: none; border-color: #7070cc; }
   flex: 1; padding: 6px 8px;
   background: #0d0d1a; border: 1px solid #555; border-radius: 5px;
   color: #e8e8ff; font-size: 1.2rem; letter-spacing: 0.1em;
+  font-family: inherit; line-height: 1.6;
+  /* Height is driven by content (see autoGrowUserText) — a fixed one-line box hides
+     everything but the tail, which is the opposite of what's useful while transcribing. */
+  resize: none; overflow: hidden; min-height: 2.4rem;
+  word-break: break-all; /* Japanese wraps anywhere; no words to keep whole */
 }
 #user-text:focus { outline: none; border-color: #7070cc; }
-#undo-char { padding: 6px 10px; font-size: 1rem; }
+/* Vertical boxes: match the page, so the transcription can be read against the
+   original without mentally rotating it. Lines run down a fixed-height column and
+   wrap leftward into new ones, so here it's the width that tracks the content. */
+#user-text.vertical {
+  writing-mode: vertical-rl;
+  flex: 0 0 auto;
+  height: 10rem; min-height: 0;
+  min-width: 2.4rem; max-width: 100%;
+}
+.user-text-row.vertical { align-items: flex-start; justify-content: flex-end; }
+#undo-char { padding: 6px 10px; font-size: 1rem; flex-shrink: 0; }
 
 .save-row { display: flex; align-items: center; gap: 8px; }
 #save-status { font-size: 0.78rem; color: #666; }
@@ -485,8 +500,8 @@ input:focus { outline: none; border-color: #7070cc; }
             </div>
           </div>
           <div class="label">Your text</div>
-          <div class="user-text-row">
-            <input id="user-text" type="text" placeholder="Confirm characters below…">
+          <div class="user-text-row" id="user-text-row">
+            <textarea id="user-text" rows="1" placeholder="Confirm characters below…"></textarea>
             <button id="undo-char" title="Remove last character">⌫</button>
           </div>
           <div class="save-row">
@@ -598,6 +613,7 @@ const fixWordsSaveEl     = document.getElementById('fix-words-save');
 const fixWordsEditorCancelEl = document.getElementById('fix-words-editor-cancel');
 const fixWordsStatusEl   = document.getElementById('fix-words-status');
 const userTextEl     = document.getElementById('user-text');
+const userTextRowEl  = document.getElementById('user-text-row');
 const undoBtnEl      = document.getElementById('undo-char');
 const saveBtnEl      = document.getElementById('save-btn');
 const deleteBtnEl    = document.getElementById('delete-btn');
@@ -1559,7 +1575,7 @@ askVisionBtnEl.addEventListener('click', async () => {
 visionUseBtnEl.addEventListener('click', () => {
   const text = visionResultTextEl.textContent;
   if (!text || text === '(model saw no legible text)') return;
-  userTextEl.value = text;
+  setUserText(text);
   userTextEl.dispatchEvent(new Event('input'));
 });
 
@@ -1783,7 +1799,8 @@ function selectRegion(idx) {
   askVisionBtnEl.disabled = false;
   askVisionBtnEl.textContent = '🤖 Ask model';
 
-  userTextEl.value = s.user_text ?? '';
+  setUserText(s.user_text ?? '');
+  applyUserTextDirection();
   directionToggleEl.textContent = s.direction === 'v' ? '↕ v' : '↔ h';
   saveStatEl.textContent = '';
   clearCanvas();
@@ -2232,6 +2249,59 @@ document.addEventListener('click', e => {
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDictPopover(); });
 dictPopoverCloseEl.addEventListener('click', closeDictPopover);
 
+// ── Your text field ────────────────────────────────────────────────────────────
+// A textarea rather than a one-line input: the panel is ~360px and the caret sits at
+// the end while characters are tapped in, so in a single-line field the part you'd
+// want to re-read is exactly the part that has scrolled out of view. Every write to
+// it goes through setUserText/appendUserChar so the box resizes to fit.
+
+function autoGrowUserText() {
+  if (userTextEl.offsetParent === null) return; // hidden: scroll sizes read as 0
+  if (userTextEl.classList.contains('vertical')) {
+    userTextEl.style.height = ''; // fixed column height comes from CSS
+    // Collapse to the CSS min-width first: a textarea's auto width is its default
+    // ~20-column intrinsic size, which scrollWidth would report back instead of the
+    // content. The +4 covers trailing padding scrollWidth can omit.
+    userTextEl.style.width = '0px';
+    userTextEl.style.width = `${userTextEl.scrollWidth + 4}px`;
+  } else {
+    userTextEl.style.width = '';
+    userTextEl.style.height = 'auto';
+    userTextEl.style.height = `${userTextEl.scrollHeight}px`;
+  }
+}
+
+function setUserText(value) {
+  userTextEl.value = value;
+  autoGrowUserText();
+}
+
+function appendUserChar(char) {
+  setUserText(userTextEl.value + char);
+}
+
+function applyUserTextDirection() {
+  const vertical = sentences[activeIdx]?.direction === 'v';
+  userTextEl.classList.toggle('vertical', vertical);
+  userTextRowEl.classList.toggle('vertical', vertical);
+  userTextEl.style.height = '';
+  userTextEl.style.width = '';
+  autoGrowUserText();
+}
+
+// Wrapping depends on the panel's width, which changes when an iPad is rotated.
+window.addEventListener('resize', autoGrowUserText);
+
+// Enter never inserts a newline — this holds one sentence, and the OCR text it's
+// checked against has its whitespace stripped, so a newline would only make the two
+// diverge for no reason. It commits instead, matching the Save button.
+userTextEl.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  clearTimeout(saveTimer);
+  saveRegion();
+});
+
 // ── Save region text ───────────────────────────────────────────────────────────
 
 let saveTimer = null;
@@ -2267,16 +2337,18 @@ directionToggleEl.addEventListener('click', () => {
   const s = sentences[activeIdx];
   s.direction = s.direction === 'v' ? 'h' : 'v';
   directionToggleEl.textContent = s.direction === 'v' ? '↕ v' : '↔ h';
+  applyUserTextDirection();
   renderBoxes();
   syncSentence(activeIdx);
 });
 userTextEl.addEventListener('input', () => {
+  autoGrowUserText();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(saveRegion, 1200);
 });
 undoBtnEl.addEventListener('click', () => {
   if (!userTextEl.value.length) return;
-  userTextEl.value = userTextEl.value.slice(0, -1);
+  setUserText(userTextEl.value.slice(0, -1));
   clearTimeout(saveTimer);
   saveTimer = setTimeout(saveRegion, 800);
 });
@@ -2343,7 +2415,7 @@ function displayRadicalResults(results) {
     const meaning = (r.meanings && r.meanings[0]) || '';
     el.innerHTML = `<span class="candidate-char">${r.char}</span><span class="candidate-score">${meaning}</span>`;
     el.addEventListener('click', () => {
-      userTextEl.value += r.char;
+      appendUserChar(r.char);
       clearTimeout(saveTimer); saveTimer = setTimeout(saveRegion, 600);
       selectedRadicals = [];
       renderChips();
@@ -2444,7 +2516,7 @@ function runRecognition() {
 function confirmChar(char, el) {
   document.querySelectorAll('.candidate').forEach(c => c.classList.remove('selected'));
   el.classList.add('selected');
-  userTextEl.value += char;
+  appendUserChar(char);
   clearTimeout(saveTimer); saveTimer = setTimeout(saveRegion, 600);
   setTimeout(clearCanvas, 250);
 }
