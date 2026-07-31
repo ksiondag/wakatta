@@ -117,6 +117,33 @@ Primary machine: 4090 GPU, Arch Linux. Also runs on Framework 12 (CPU-only, slow
   since those stretch each axis independently to fill `[0,1]` for stroke-matching purposes
   and visually distort simple/thin strokes (e.g. 一 renders as a diagonal line)
 
+**Three routes to a character you don't know**, as a mode toggle above the handwriting
+canvas — each covers where the others fail; all three end the same way, clicking a
+character appends it to "Your text":
+- **Draw kanji** — DTW stroke matching against KanjiVG (needs you to make out the strokes)
+- **By radicals** — pick components you recognize, intersect via KRADFILE
+  (`GET /api/kanji/by-components`; needs you to decompose the character)
+- **From OCR** (`GET /api/sentences/{id}/ocr-candidates`) — for the case both of the above
+  dead-end on: a character too small, blurry, or stylized to draw or decompose. Re-reads the
+  box and reports what manga-ocr *nearly* read at each character position, scored. When it
+  picks wrong, the right character is usually still in its top few guesses
+  - manga-ocr's tokenizer is character-level for Japanese, so the decoder's output
+    distribution at one step is a ranked, scored list of what that character could be —
+    normally discarded in favour of the winner
+  - Recovered in two passes: generate normally (so the text matches the stored `ocr_text`
+    exactly), then one teacher-forced forward pass over the finished sequence to read off
+    each position's distribution. The scores `generate()` returns directly are per-beam and
+    don't align with the winning sequence — this model decodes with 4 beams — while
+    re-running the decoder on the final text aligns by construction
+  - Each position shows its confidence (chips tinted amber/red as it drops, panel opens on
+    the weakest character); each candidate shows its probability plus a KANJIDIC2 gloss,
+    since runner-ups are visually similar by construction (徹/徽/徴) and the meaning is
+    usually what identifies the right one. The model's own pick is ranked in among the
+    alternatives rather than above them — beam search optimizes the whole line, so a
+    committed character can genuinely score below an alternative at its own position, which
+    is itself a signal that this is where the read went wrong
+  - Read-only: nothing is saved until a character is clicked
+
 ### Handwriting Recognition Webapp (`server.py` + `static/index.html`)
 - FastAPI server loads KanjiVG stroke database on startup, generates `static/db.json`
 - HTML5 Canvas captures stylus/pointer strokes
@@ -287,6 +314,29 @@ SegmentationOverride              ← implemented (user-defined tokenizer correc
 - [x] **Pitch accent** — Kanjium dataset imported via `dictionary.py`; shown per-candidate in
       the dictionary popover as raw pattern number(s) (e.g. `[0]`, `[1,3]`) — see "Dictionary —
       Deferred" below for the richer visual version
+- [ ] **Highlight an individual character on the page** — selecting a character in the reader
+      (the From OCR panel especially, where a box of 15 chips doesn't say which glyph you just
+      tapped) should show where on the page that character is. Not a priority, but prototyped
+      once already, so the findings are worth keeping:
+      - *Cross-attention*: manga-ocr predicts no character boxes, but each decoding step's
+        attention over the encoder's 14×14 patches aligns output character to image region —
+        threshold at half its peak, bounding-box what survives. Needs the decoder's attention
+        implementation set to `eager` (sdpa returns no weights). Centroids advanced along the
+        reading direction in 99% of consecutive pairs, but extent is coarse: one patch is ~7%
+        of the crop, so boxes came out loose and sometimes overlapping on dense lines
+      - *Projection profile*: Japanese type is set on a fixed-width em square, so ink projected
+        onto the reading axis forms a comb, one lobe per character — pure OpenCV, no GPU. Needs
+        two stages (split lines across the cross axis first, or a paragraph's lines superimpose
+        into mush), and the character count should be taken as given, which turns ambiguity into
+        reconciliation: merge narrowest gaps where a character came apart (二, 三, か), split
+        deepest valleys where two ran together. Line count has an independent geometric
+        expectation that should *veto* splits but never demand them — an invented line break
+        misassigns characters, a missed one only degrades to even division
+      - The two fail in unrelated ways, so agreeing on where a character is turned out to be
+        good evidence: over 30 real boxes the agreement score was sharply bimodal (27 scored
+        0.67-1.00, 24 of them exactly 1.00; the 3 failures were all multi-line paragraphs of
+        83+ characters, scoring 0.02/0.12/0.48), which cleanly separates trustworthy geometry
+        from guesswork
 
 ### Dictionary — Deferred
 - [ ] **Japanese-Japanese (JJ) definitions** — JMdict's own glosses are English-only; the

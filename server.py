@@ -16,12 +16,15 @@ import cv2
 import fitz
 import fugashi
 import httpx
+import jaconv
 import numpy as np
+import torch
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from manga_ocr import MangaOcr
+from manga_ocr.ocr import post_process as mocr_post_process
 from PIL import Image
 from pydantic import BaseModel
 from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, func
@@ -350,6 +353,119 @@ async def _ocr_region(page_id: int, x1: int, y1: int, x2: int, y2: int) -> str |
         crop = crop_region(page_image, x1, y1, x2, y2)
         text = await asyncio.to_thread(mocr, crop)
         return text.strip() or None
+
+
+def _decode_with_alternatives(crop: Image.Image, top_k: int) -> dict:
+    """Re-run manga-ocr on `crop`, keeping the runner-up characters it discarded.
+
+    manga-ocr is an encoder-decoder that emits one token per step, and its tokenizer
+    is character-level for Japanese — so the decoder's output distribution at a given
+    step *is* a ranked, scored list of what that character could be. Normal generation
+    throws all of that away and keeps only the winner; recovering it is what makes
+    "what else could this kanji have been?" answerable without a second model.
+
+    Done as two passes: generate exactly as MangaOcr.__call__ does (so `text` matches
+    the stored ocr_text character for character), then one teacher-forced forward pass
+    over that finished sequence to read off each position's distribution. The scores
+    generate() can hand back directly are per-beam and don't line up with the winning
+    sequence — this model decodes with 4 beams — whereas re-running the decoder on the
+    final text lines up by construction, for one extra forward pass.
+
+    So an alternative means "what else fits *this* position, given the characters
+    actually chosen around it" — not an alternative reading of the whole box.
+    """
+    img = crop.convert("L").convert("RGB")
+    pixel_values = mocr._preprocess(img)[None].to(mocr.model.device)
+    with torch.no_grad():
+        sequence = mocr.model.generate(pixel_values, max_length=300)
+        # logits[i] is the distribution the decoder used for sequence[i + 1].
+        logits = mocr.model(pixel_values=pixel_values, decoder_input_ids=sequence).logits[0]
+
+    tok = mocr.tokenizer
+    sequence = sequence[0]
+    special_ids = set(tok.all_special_ids)
+
+    positions = []
+    for step in range(len(sequence) - 1):
+        chosen_id = sequence[step + 1].item()
+        if chosen_id in special_ids:
+            continue
+        probs = torch.softmax(logits[step].float(), dim=-1)
+        # Over-fetch so dropping specials/blanks still leaves top_k alternatives.
+        top_probs, top_ids = probs.topk(min(top_k + len(special_ids) + 1, probs.numel()))
+
+        alternatives = []
+        for token_id, prob in zip(top_ids.tolist(), top_probs.tolist()):
+            if token_id == chosen_id or token_id in special_ids:
+                continue
+            char = _clean_token(tok.convert_ids_to_tokens(token_id))
+            if not char:
+                continue
+            alternatives.append({"char": char, "prob": round(prob, 6)})
+            if len(alternatives) == top_k:
+                break
+
+        char = _clean_token(tok.convert_ids_to_tokens(chosen_id))
+        if not char:
+            continue
+        positions.append({
+            "index": len(positions),
+            "char": char,
+            "prob": round(probs[chosen_id].item(), 6),
+            "alternatives": alternatives,
+        })
+
+    text = mocr_post_process(tok.decode(sequence, skip_special_tokens=True))
+    return {"text": text or None, "positions": positions}
+
+
+def _clean_token(token: str) -> str:
+    """Tokenizer piece -> the character as it appears in ocr_text: drop the wordpiece
+    continuation marker and apply the same half- to full-width normalization
+    manga_ocr.post_process does, so alternatives are comparable to the OCR text."""
+    token = token.removeprefix("##").strip()
+    return jaconv.h2z(token, ascii=True, digit=True)
+
+
+def _annotate_kanji(positions: list[dict]) -> None:
+    """Attach a one-line KANJIDIC2 gloss to every candidate character, in place.
+
+    Runner-ups from the OCR model are visually similar by construction (徹/徽/徴),
+    which is exactly what makes them hard to tell apart by eye — the meaning and
+    reading are usually what identifies the right one."""
+    if not kanji.is_ready(engine):
+        return
+    glosses: dict[str, dict | None] = {}
+    for pos in positions:
+        for cand in [pos, *pos["alternatives"]]:
+            char = cand["char"]
+            if char not in glosses:
+                data = kanji.lookup(engine, char)
+                glosses[char] = {
+                    "meaning": (data.get("meanings") or [None])[0],
+                    "readings": (data.get("on") or [])[:2] + (data.get("kun") or [])[:2],
+                } if data else None
+            gloss = glosses[char]
+            if gloss:
+                cand["meaning"] = gloss["meaning"]
+                cand["readings"] = gloss["readings"]
+
+
+async def _ocr_region_alternatives(
+    page_id: int, x1: int, y1: int, x2: int, y2: int, top_k: int
+) -> dict:
+    """Crop a region of a stored page PNG and OCR it, keeping per-character runner-ups."""
+    img_path = PAGES_DIR / f"{page_id}.png"
+    if not img_path.exists():
+        raise HTTPException(404, "Page image not found")
+    if mocr is None:
+        raise HTTPException(503, "manga-ocr not loaded")
+    async with _process_lock:
+        page_image = await asyncio.to_thread(Image.open, img_path)
+        crop = crop_region(page_image, x1, y1, x2, y2)
+        result = await asyncio.to_thread(_decode_with_alternatives, crop, top_k)
+    _annotate_kanji(result["positions"])
+    return result
 
 
 _VISION_PROMPT = (
@@ -986,6 +1102,27 @@ async def ask_vision_model(sentence_id: int):
 
     text = await _ask_vision_model(page_id, x1, y1, x2, y2)
     return {"text": text or None, "model": VISION_MODEL}
+
+
+@app.get("/api/sentences/{sentence_id}/ocr-candidates")
+async def sentence_ocr_candidates(sentence_id: int, top_k: int = 8):
+    """Per-character alternatives for this box, ranked by the OCR model's own confidence.
+
+    A third way into a character the reader can't identify, alongside drawing it and
+    picking radicals: when manga-ocr gets a kanji wrong the right one is usually still
+    in its top few guesses, and the stroke/radical routes are exactly the ones that
+    fail on a character you can't make out well enough to draw or decompose.
+
+    Read-only — nothing here is saved; the user picks a character and it goes into
+    their text through the normal update endpoint."""
+    top_k = max(1, min(top_k, 20))
+    with Session(engine) as session:
+        s = session.get(Sentence, sentence_id)
+        if s is None:
+            raise HTTPException(404, "Sentence not found")
+        page_id, x1, y1, x2, y2 = s.page_id, s.x1, s.y1, s.x2, s.y2
+
+    return await _ocr_region_alternatives(page_id, x1, y1, x2, y2, top_k)
 
 
 @app.delete("/api/sentences/{sentence_id}", status_code=204)

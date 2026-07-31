@@ -346,6 +346,33 @@ input:focus { outline: none; border-color: #7070cc; }
 #radical-results { display: flex; flex-wrap: wrap; gap: 8px; }
 .results-status { color: #666; font-size: 0.8rem; }
 
+/* ── OCR alternatives ── */
+#ocr-alt-panel { padding: 10px 14px; display: flex; flex-direction: column; gap: 10px; }
+.ocr-alt-bar { display: flex; align-items: center; gap: 10px; }
+.ocr-alt-bar button { font-size: 0.75rem; padding: 4px 10px; }
+#ocr-alt-status { font-size: 0.78rem; color: #888; flex: 1; }
+
+.ocr-alt-chars { display: flex; flex-wrap: wrap; gap: 6px; }
+.ocr-char {
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  padding: 5px 7px; border: 1px solid #444; border-radius: 6px;
+  background: #202030; cursor: pointer; min-width: 40px;
+}
+.ocr-char:hover { border-color: #7070cc; }
+.ocr-char.active { background: #3a3a7a; border-color: #8888ff; }
+.ocr-char-glyph { font-size: 1.5rem; line-height: 1.1; }
+.ocr-char-conf { font-size: 0.6rem; color: #6a8a6a; }
+/* Confidence is the whole point of the panel — the character worth a second look
+   should be findable without reading any numbers. */
+.ocr-char.mid  { border-color: #7a6030; }
+.ocr-char.mid  .ocr-char-conf { color: #c09040; }
+.ocr-char.low  { border-color: #7a3a3a; }
+.ocr-char.low  .ocr-char-conf { color: #e07070; }
+
+#ocr-alt-results { display: flex; flex-wrap: wrap; gap: 8px; }
+.candidate.ocr-pick { border-color: #6a9a6a; }
+.candidate-gloss { font-size: 0.6rem; color: #888; max-width: 76px; text-align: center; overflow-wrap: anywhere; }
+
 /* ── Dictionary popover ── */
 .dict-popover {
   position: fixed; width: 320px; max-height: 60vh; overflow-y: auto;
@@ -514,6 +541,7 @@ input:focus { outline: none; border-color: #7070cc; }
         <div class="hw-mode-toggle">
           <button id="mode-kanji-btn" class="hw-mode-btn active">Draw kanji</button>
           <button id="mode-radical-btn" class="hw-mode-btn">By radicals</button>
+          <button id="mode-ocr-btn" class="hw-mode-btn" title="What else could the OCR have read here? Shows the runner-up characters it scored and rejected">From OCR</button>
         </div>
 
         <div class="canvas-section">
@@ -534,6 +562,15 @@ input:focus { outline: none; border-color: #7070cc; }
           <button id="radical-grid-toggle">Show radical list</button>
           <div id="radical-grid" hidden></div>
           <div id="radical-results"></div>
+        </div>
+
+        <div id="ocr-alt-panel" hidden>
+          <div class="ocr-alt-bar">
+            <button id="ocr-alt-refresh">↻ Re-read box</button>
+            <span id="ocr-alt-status"></span>
+          </div>
+          <div id="ocr-alt-chars" class="ocr-alt-chars"></div>
+          <div id="ocr-alt-results"></div>
         </div>
 
         <div id="hw-empty">← Select a bounding box to start transcribing</div>
@@ -631,6 +668,12 @@ const radicalChipsEl    = document.getElementById('radical-chips');
 const radicalGridToggleBtn = document.getElementById('radical-grid-toggle');
 const radicalGridEl     = document.getElementById('radical-grid');
 const radicalResultsEl  = document.getElementById('radical-results');
+const modeOcrBtn        = document.getElementById('mode-ocr-btn');
+const ocrAltPanelEl     = document.getElementById('ocr-alt-panel');
+const ocrAltRefreshBtn  = document.getElementById('ocr-alt-refresh');
+const ocrAltStatusEl    = document.getElementById('ocr-alt-status');
+const ocrAltCharsEl     = document.getElementById('ocr-alt-chars');
+const ocrAltResultsEl   = document.getElementById('ocr-alt-results');
 
 const syncStatusEl     = document.getElementById('sync-status');
 const editModeBtnEl    = document.getElementById('edit-mode-btn');
@@ -1805,6 +1848,9 @@ function selectRegion(idx) {
   saveStatEl.textContent = '';
   clearCanvas();
   hwStatEl.textContent = 'Draw a character';
+
+  resetOcrAlternatives(); // belongs to the box we just left
+  if (hwMode === 'ocr') loadOcrAlternatives();
 }
 
 prevRegBtnEl.addEventListener('click', () => { if (activeIdx > 0) selectRegion(activeIdx - 1); });
@@ -2355,7 +2401,7 @@ undoBtnEl.addEventListener('click', () => {
 
 // ── Radical search mode ─────────────────────────────────────────────────────────
 
-let hwMode = 'kanji'; // 'kanji' | 'radical'
+let hwMode = 'kanji'; // 'kanji' | 'radical' | 'ocr'
 let selectedRadicals = [];
 let radicalsList = null;
 
@@ -2363,11 +2409,15 @@ function setHwMode(newMode) {
   hwMode = newMode;
   modeKanjiBtn.classList.toggle('active', hwMode === 'kanji');
   modeRadicalBtn.classList.toggle('active', hwMode === 'radical');
+  modeOcrBtn.classList.toggle('active', hwMode === 'ocr');
   radicalPanelEl.hidden = hwMode !== 'radical';
+  ocrAltPanelEl.hidden = hwMode !== 'ocr';
   clearCanvas();
+  if (hwMode === 'ocr') loadOcrAlternatives();
 }
 modeKanjiBtn.addEventListener('click', () => setHwMode('kanji'));
 modeRadicalBtn.addEventListener('click', () => setHwMode('radical'));
+modeOcrBtn.addEventListener('click', () => setHwMode('ocr'));
 
 function addRadical(char) {
   if (!selectedRadicals.includes(char)) {
@@ -2451,6 +2501,117 @@ radicalGridToggleBtn.addEventListener('click', async () => {
   radicalGridEl.hidden = false;
   radicalGridToggleBtn.textContent = 'Hide radical list';
 });
+
+// ── OCR alternatives mode ───────────────────────────────────────────────────────
+// A third route to a character, for when the first two dead-end: drawing it needs
+// you to make out its strokes and picking radicals needs you to decompose it, both
+// of which fail on exactly the small/blurry/stylized glyphs OCR also struggles with.
+// GET .../ocr-candidates re-reads the box and reports, per character position, what
+// else the model scored highly there — when it picked wrong, the right character is
+// usually still near the top. Nothing is saved until a character is clicked, which
+// appends it to Your text like the other two modes.
+
+let ocrAltSentenceId = null;  // sentence the loaded alternatives belong to
+let ocrAltPositions = [];
+let ocrAltSelected = null;    // index into ocrAltPositions
+
+function resetOcrAlternatives() {
+  ocrAltSentenceId = null;
+  ocrAltPositions = [];
+  ocrAltSelected = null;
+  ocrAltCharsEl.innerHTML = '';
+  ocrAltResultsEl.innerHTML = '';
+  ocrAltStatusEl.textContent = '';
+}
+
+async function loadOcrAlternatives(force = false) {
+  const s = sentences[activeIdx];
+  if (!s) { resetOcrAlternatives(); ocrAltStatusEl.textContent = 'Select a box'; return; }
+  if (!s.id) { resetOcrAlternatives(); ocrAltStatusEl.textContent = 'Save this box first'; return; }
+  if (!force && ocrAltSentenceId === s.id) return;
+
+  resetOcrAlternatives();
+  ocrAltStatusEl.textContent = 'Re-reading box…';
+  ocrAltRefreshBtn.disabled = true;
+  const sentenceId = s.id;
+  try {
+    const res = await fetch(`/api/sentences/${sentenceId}/ocr-candidates?top_k=8`);
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    if (sentences[activeIdx]?.id !== sentenceId) return; // user moved on while we waited
+    ocrAltSentenceId = sentenceId;
+    ocrAltPositions = data.positions || [];
+    renderOcrAltChars();
+  } catch (err) {
+    ocrAltStatusEl.textContent = 'Re-read failed';
+    console.error('ocr-candidates failed:', err);
+  } finally {
+    ocrAltRefreshBtn.disabled = false;
+  }
+}
+
+function confidenceClass(prob) {
+  return prob >= 0.9 ? '' : prob >= 0.5 ? 'mid' : 'low';
+}
+
+function renderOcrAltChars() {
+  ocrAltCharsEl.innerHTML = '';
+  if (!ocrAltPositions.length) {
+    ocrAltStatusEl.textContent = 'No text read in this box';
+    return;
+  }
+  ocrAltPositions.forEach(pos => {
+    const el = document.createElement('div');
+    el.className = `ocr-char ${confidenceClass(pos.prob)}`;
+    el.innerHTML = `<span class="ocr-char-glyph">${pos.char}</span>` +
+                   `<span class="ocr-char-conf">${Math.round(pos.prob * 100)}%</span>`;
+    el.title = pos.meaning ? `${pos.char} — ${pos.meaning}` : pos.char;
+    el.addEventListener('click', () => selectOcrPosition(pos.index));
+    ocrAltCharsEl.appendChild(el);
+  });
+
+  // Jump straight to the shakiest character — with a whole box of chips to choose
+  // from, that's overwhelmingly the one the reader came here about.
+  const weakest = ocrAltPositions.reduce((a, b) => (b.prob < a.prob ? b : a));
+  if (weakest.prob < 0.9) {
+    selectOcrPosition(weakest.index);
+  } else {
+    ocrAltStatusEl.textContent = 'Tap a character for alternatives';
+  }
+}
+
+function selectOcrPosition(index) {
+  ocrAltSelected = index;
+  const pos = ocrAltPositions[index];
+  ocrAltCharsEl.querySelectorAll('.ocr-char').forEach((el, i) => {
+    el.classList.toggle('active', i === index);
+  });
+  ocrAltStatusEl.textContent = `${pos.char} read at ${Math.round(pos.prob * 100)}% confidence`;
+
+  // The model's own pick is listed alongside the runner-ups rather than above them,
+  // ranked by score like everything else: beam search optimizes the whole line, so a
+  // character it committed to can genuinely score below an alternative here — which
+  // is itself the signal that this is the position that went wrong.
+  const ranked = [
+    { char: pos.char, prob: pos.prob, meaning: pos.meaning, chosen: true },
+    ...pos.alternatives,
+  ].sort((a, b) => b.prob - a.prob);
+
+  ocrAltResultsEl.innerHTML = '';
+  ranked.forEach(c => {
+    const el = document.createElement('div');
+    el.className = `candidate${c.chosen ? ' ocr-pick' : ''}`;
+    const pct = c.prob >= 0.001 ? `${(c.prob * 100).toFixed(1)}%` : '<0.1%';
+    el.innerHTML = `<span class="candidate-char">${c.char}</span>` +
+                   `<span class="candidate-score">${c.chosen ? '✓ ' : ''}${pct}</span>` +
+                   (c.meaning ? `<span class="candidate-gloss">${c.meaning}</span>` : '');
+    if (c.readings?.length) el.title = `${c.char} 「${c.readings.join('、')}」`;
+    el.addEventListener('click', () => confirmChar(c.char, el));
+    ocrAltResultsEl.appendChild(el);
+  });
+}
+
+ocrAltRefreshBtn.addEventListener('click', () => loadOcrAlternatives(true));
 
 // ── Handwriting ────────────────────────────────────────────────────────────────
 
