@@ -14,6 +14,19 @@ html, body {
   font-family: sans-serif;
   font-size: 14px;
   overscroll-behavior: none;
+  /* touch-action: none stops scrolling but not selection: an Apple Pencil stroke
+     that strays off a canvas still starts a text selection, and a slow press
+     raises the callout menu. This is a drawing surface, so neither is wanted. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The answer text is worth being able to select and look up, so opt it back in. */
+.answer, .charcard .info, .kinfo, .session .status, .pv {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .layout { display: flex; flex-direction: column; height: 100vh; }
@@ -93,7 +106,7 @@ button.primary { border-color: #7070cc; background: #2e2e56; }
 .prompt .cue { color: #8a8aa8; font-size: 0.9rem; margin-bottom: 12px; }
 .prompt audio { width: 260px; height: 36px; vertical-align: middle; }
 
-.canvases { display: flex; flex-wrap: wrap; gap: 16px; justify-content: center; }
+.canvases { display: flex; flex-wrap: wrap; gap: 16px; justify-content: center; touch-action: none; }
 .slot { display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .pad {
   width: 190px; height: 190px;
@@ -139,7 +152,8 @@ button.primary { border-color: #7070cc; background: #2e2e56; }
 .chip.order { border-color: #b08840; color: #d9a441; }
 .chip.direction { border-color: #b06a40; color: #d9884a; }
 .chip.shape, .chip.wrong, .chip.extra { border-color: #a05555; color: #d69090; }
-.charcard svg { width: 96px; height: 96px; background: #12122a; border-radius: 6px; }
+.charcard svg { width: 96px; height: 96px; background: #12122a; border-radius: 6px;
+  pointer-events: none; -webkit-user-drag: none; }
 
 .answer { text-align: center; margin-top: 18px; }
 .answer .word { font-size: 40px; }
@@ -167,13 +181,13 @@ button.primary { border-color: #7070cc; background: #2e2e56; }
 
 /* Trace phase: the model sits behind a transparent canvas so the same square is
    both the thing you're watching and the thing you're drawing on. */
-.tracewrap { position: relative; width: 190px; height: 190px; }
+.tracewrap { position: relative; width: 190px; height: 190px; touch-action: none; }
 .tracewrap .ghost {
   position: absolute; inset: 0;
   background: #101020; border: 1px solid #3a3a55; border-radius: 8px;
   pointer-events: none;
 }
-.tracewrap .ghost svg { width: 100%; height: 100%; }
+.tracewrap .ghost svg { width: 100%; height: 100%; -webkit-user-drag: none; }
 .grind .model .tracewrap .ghost svg path { stroke: #55557a; stroke-width: 5; }
 .grind .model .tracewrap .ghost svg text { fill: #6a7fa8; font-size: 7px; stroke: none; }
 .tracewrap canvas {
