@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wakatta — Anki</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: sans-serif;
+  font-size: 14px;
+}
+
+.layout { display: flex; flex-direction: column; height: 100vh; }
+
+/* ── Navbar ── */
+.navbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  background: #12122a;
+  border-bottom: 1px solid #333;
+}
+.navbar a { color: #888; text-decoration: none; font-size: 0.9rem; }
+.navbar a:hover { color: #bbb; }
+.navbar .current { color: #aaa; font-size: 0.9rem; font-weight: 600; }
+.navbar-sep { color: #444; }
+.navbar .spacer { flex: 1; }
+.navbar .stat { color: #777; font-size: 0.8rem; }
+.navbar .toggle { color: #888; font-size: 0.85rem; display: flex; align-items: center; gap: 5px; cursor: pointer; }
+
+button {
+  padding: 6px 16px;
+  border: 1px solid #555;
+  border-radius: 5px;
+  background: #2a2a3e;
+  color: #ddd;
+  cursor: pointer;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+button:hover { background: #3a3a5e; }
+button:disabled { opacity: 0.4; cursor: default; }
+
+/* ── Body: deck list | note list | note detail ── */
+.main { flex: 1; display: flex; min-height: 0; }
+
+.decks {
+  width: 260px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-right: 1px solid #333;
+  padding: 8px 0;
+}
+.deck {
+  padding: 7px 16px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border-left: 3px solid transparent;
+}
+.deck:hover { background: #22223a; }
+.deck.sel { background: #26264a; border-left-color: #7070cc; }
+.deck .n { color: #777; font-size: 0.8rem; }
+.deck .no-audio { color: #c88; font-size: 0.75rem; }
+.deck .dim { color: #666; }
+.deck .leech-n { color: #d9a441; font-size: 0.75rem; }
+
+.notes-pane {
+  width: 340px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #333;
+  min-height: 0;
+}
+.filters {
+  flex-shrink: 0;
+  display: flex;
+  gap: 14px;
+  padding: 8px 14px;
+  background: #16162c;
+  border-bottom: 1px solid #333;
+  font-size: 0.8rem;
+  color: #888;
+}
+.filters label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.filters .count { margin-left: auto; color: #666; }
+.notes { flex: 1; overflow-y: auto; }
+.note-row { padding: 8px 14px; cursor: pointer; border-bottom: 1px solid #262640; }
+.note-row:hover { background: #22223a; }
+.note-row.sel { background: #26264a; }
+.note-row .jp { font-size: 1.05rem; color: #e8e8f0; }
+.note-row .meta { color: #6a6a88; font-size: 0.75rem; margin-top: 3px; }
+.note-row .flag { color: #c88; }
+.note-row .leech { color: #d9a441; }
+
+.detail { flex: 1; overflow-y: auto; padding: 20px 24px; min-width: 0; }
+.detail h2 { font-size: 1rem; color: #aaa; font-weight: 600; margin-bottom: 12px; }
+.field { margin-bottom: 12px; }
+.field .name { color: #6a6a88; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.field .val { color: #e8e8f0; font-size: 1.05rem; margin-top: 2px; word-break: break-word; }
+.field .val.empty { color: #555; font-style: italic; }
+.field audio, .field video { display: block; margin-top: 4px; max-width: 100%; }
+.field audio { height: 32px; }
+.field video { max-height: 220px; border-radius: 4px; }
+
+.tokens { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.tok {
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: #24243c;
+  border: 1px solid #35354f;
+  font-size: 0.95rem;
+}
+.tok .rd { color: #7a7a9a; font-size: 0.75rem; margin-left: 5px; }
+.tok.word { border-color: #7070cc; }
+
+.derive {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid #333;
+}
+.derive .row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.derive label { color: #999; font-size: 0.85rem; display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.derive .scope { color: #d9a441; }
+.preview { margin-top: 14px; }
+.pv {
+  padding: 8px 10px;
+  border-left: 3px solid #4a7a4a;
+  background: #1e1e34;
+  margin-bottom: 6px;
+  font-size: 0.85rem;
+}
+.pv.skip { border-left-color: #555; opacity: 0.55; }
+.pv .k { color: #7a7a9a; }
+.pv .v { color: #ddd; }
+.pv .why { color: #999; font-style: italic; }
+.note-msg { color: #8a8; font-size: 0.85rem; margin-top: 10px; }
+
+.empty-state { color: #666; padding: 40px 24px; text-align: center; }
+.err { color: #d88; padding: 10px 16px; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="navbar">
+    <a href="/page-reader">Library</a>
+    <span class="navbar-sep">/</span>
+    <span class="current">Anki</span>
+    <button id="sync">Sync</button>
+    <label class="toggle"><input type="checkbox" id="allDecks"> all decks</label>
+    <span class="spacer"></span>
+    <span class="stat" id="stat"></span>
+  </div>
+
+  <div class="main">
+    <div class="decks" id="decks"></div>
+    <div class="notes-pane">
+      <div class="filters">
+        <label><input type="checkbox" id="fLeech"> leeches</label>
+        <label><input type="checkbox" id="fNoAudio"> no audio</label>
+        <span class="count" id="noteCount"></span>
+      </div>
+      <div class="notes" id="notes"></div>
+    </div>
+    <div class="detail" id="detail">
+      <div class="empty-state">Pick a deck, then a note.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let state = { deck: null, noteId: null };
+let lastNoteIds = [];
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+}
+
+async function loadStats() {
+  try {
+    const s = await api('/api/anki/stats');
+    $('stat').textContent =
+      `${s.notes} notes · ${s.notes_indexed} indexed · ${s.distinct_words} words · ` +
+      `${s.notes_without_audio} without audio`;
+  } catch (e) { $('stat').textContent = ''; }
+}
+
+async function loadDecks() {
+  let decks;
+  try {
+    decks = await api('/api/anki/decks?indexed_only=' + ($('allDecks').checked ? 'false' : 'true'));
+  } catch (e) {
+    $('decks').innerHTML = `<div class="err">${e.message}</div>`;
+    return;
+  }
+  $('decks').innerHTML = '';
+  for (const d of decks) {
+    const el = document.createElement('div');
+    el.className = 'deck' + (d.name === state.deck ? ' sel' : '');
+    const missing = d.notes - d.with_audio;
+    const count = d.notes || d.notes_total;
+    el.innerHTML = `<span${d.notes ? '' : ' class="dim"'}>${d.name}</span>` +
+      `<span class="n">${count}` +
+      (missing ? ` <span class="no-audio">${missing}♪</span>` : '') +
+      (d.leeches ? ` <span class="leech-n">${d.leeches}⚠</span>` : '') + `</span>`;
+    el.onclick = () => { state.deck = d.name; state.noteId = null; loadDecks(); loadNotes(); };
+    $('decks').appendChild(el);
+  }
+}
+
+// Prefer a field that reads like the note's Japanese headword or sentence for the
+// list row; notetypes differ too much to hardcode one field name.
+const PREVIEW_FIELDS = ['Vocabulary-Kanji', 'Kanji', 'kanji', 'Expression', 'Radical', 'Front'];
+
+function preview(note) {
+  for (const f of PREVIEW_FIELDS) {
+    const v = (note.fields[f] || '').replace(/<[^>]+>/g, '').trim();
+    if (v) return v;
+  }
+  const first = Object.values(note.fields).find(v => v && v.trim());
+  return (first || '(empty)').replace(/<[^>]+>/g, '').slice(0, 40);
+}
+
+async function loadNotes() {
+  if (!state.deck) return;
+  const qs = new URLSearchParams({ deck: state.deck, limit: '200' });
+  if ($('fLeech').checked) qs.set('leech', 'true');
+  if ($('fNoAudio').checked) qs.set('missing_audio', 'true');
+  const data = await api('/api/anki/notes?' + qs);
+  $('noteCount').textContent = data.total > data.notes.length
+    ? `${data.notes.length} of ${data.total}` : `${data.total}`;
+  lastNoteIds = data.notes.map(n => n.note_id);
+  $('notes').innerHTML = '';
+  for (const n of data.notes) {
+    const el = document.createElement('div');
+    el.className = 'note-row' + (n.note_id === state.noteId ? ' sel' : '');
+    el.innerHTML = `<div class="jp">${preview(n)}</div>` +
+      `<div class="meta">${n.notetype}` +
+      (n.has_audio ? '' : ' · <span class="flag">no audio</span>') +
+      (n.tags.includes('leech') ? ' · <span class="leech">leech</span>' : '') + `</div>`;
+    el.onclick = () => { state.noteId = n.note_id; loadNotes(); loadDetail(); };
+    $('notes').appendChild(el);
+  }
+  if (!data.notes.length) $('notes').innerHTML = '<div class="empty-state">No notes.</div>';
+}
+
+const VIDEO_EXT = ['mp4', 'webm', 'mov', 'mkv', 'avi'];
+
+// Anki stores media as [sound:file.ext] regardless of type — movies2anki uses it for
+// video too — so pick the element from the extension, not the tag name.
+function withPlayers(value) {
+  return value.replace(/\[sound:([^\]]+)\]/g, (_, file) => {
+    const src = `/api/anki/media/${encodeURIComponent(file)}`;
+    const ext = file.split('.').pop().toLowerCase();
+    return VIDEO_EXT.includes(ext)
+      ? `<video controls preload="none" src="${src}"></video>`
+      : `<audio controls preload="none" src="${src}"></audio>`;
+  });
+}
+
+async function loadDetail() {
+  const n = await api(`/api/anki/notes/${state.noteId}`);
+  const parts = [`<h2>${n.notetype} · ${n.decks.join(', ')}</h2>`];
+  for (const [name, val] of Object.entries(n.fields)) {
+    const clean = (val || '').trim();
+    parts.push(`<div class="field"><div class="name">${name}</div>` +
+      `<div class="val${clean ? '' : ' empty'}">${clean ? withPlayers(clean) : '—'}</div></div>`);
+  }
+  if (n.words.length) {
+    const toks = n.words.map(w =>
+      `<span class="tok ${w.role}">${w.surface}<span class="rd">${w.reading}</span></span>`).join('');
+    parts.push(`<div class="field"><div class="name">Indexed words</div>` +
+      `<div class="tokens">${toks}</div></div>`);
+  }
+  parts.push(`
+    <div class="derive">
+      <div class="row">
+        <label><input type="checkbox" id="kAudio" checked> audio → write</label>
+        <label><input type="checkbox" id="kKanji" checked> kanji breakdown</label>
+        <label><input type="checkbox" id="kBatch"> <span class="scope">all filtered notes</span></label>
+        <button id="btnPreview">Preview</button>
+        <button id="btnCreate" disabled>Create</button>
+      </div>
+      <div class="preview" id="preview"></div>
+    </div>`);
+  $('detail').innerHTML = parts.join('');
+  $('btnPreview').onclick = () => derive(false);
+  $('btnCreate').onclick = () => derive(true);
+}
+
+function derivePayload() {
+  const kinds = [];
+  if ($('kAudio').checked) kinds.push('audio_writing');
+  if ($('kKanji').checked) kinds.push('kanji');
+  const ids = $('kBatch').checked ? lastNoteIds : [state.noteId];
+  return { note_ids: ids, kinds };
+}
+
+function renderPreview(items, applied) {
+  const rows = items.map(d => {
+    const key = d.fields.Word || d.fields.Kanji || '';
+    if (d.skipped)
+      return `<div class="pv skip"><span class="k">${d.kind}</span> ` +
+             `<span class="v">${key}</span> — <span class="why">${d.skipped}</span></div>`;
+    const detail = d.kind === 'kanji'
+      ? `${d.fields.Meanings} · ${d.fields.Components}`
+      : `${d.fields.Reading} · ${d.fields.Meaning}` + withPlayers(d.fields.Audio || '');
+    return `<div class="pv"><span class="k">${d.kind}</span> ` +
+           `<span class="v">${key}</span> — ${detail}<br>` +
+           `<span class="k">→ ${d.deck}</span></div>`;
+  }).join('');
+  const made = items.filter(d => !d.skipped).length;
+  const msg = applied
+    ? `<div class="note-msg">Created ${made} note(s) and synced.</div>`
+    : `<div class="note-msg">${made} would be created, ${items.length - made} skipped.</div>`;
+  $('preview').innerHTML = msg + rows;
+}
+
+async function derive(apply) {
+  const btn = apply ? $('btnCreate') : $('btnPreview');
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = apply ? 'Creating…' : 'Checking…';
+  try {
+    const url = apply ? '/api/anki/derive/apply' : '/api/anki/derive/preview';
+    const r = await api(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(derivePayload()),
+    });
+    renderPreview(r.notes, apply);
+    $('btnCreate').disabled = apply || !r.notes.some(d => !d.skipped);
+    if (apply) { await loadStats(); await loadDecks(); }
+  } catch (e) {
+    $('preview').innerHTML = `<div class="err">${e.message}</div>`;
+  }
+  btn.textContent = label;
+  if (!apply) btn.disabled = false;
+}
+
+$('allDecks').onchange = () => loadDecks();
+$('fLeech').onchange = () => loadNotes();
+$('fNoAudio').onchange = () => loadNotes();
+
+$('sync').onclick = async () => {
+  const btn = $('sync');
+  btn.disabled = true; btn.textContent = 'Syncing…';
+  try {
+    const r = await api('/api/anki/sync', { method: 'POST' });
+    btn.textContent = r.status === 'no_changes' ? 'Up to date' : 'Synced';
+    await loadStats(); await loadDecks(); if (state.deck) await loadNotes();
+  } catch (e) {
+    btn.textContent = 'Failed';
+    $('stat').textContent = e.message;
+  }
+  setTimeout(() => { btn.disabled = false; btn.textContent = 'Sync'; }, 2000);
+};
+
+loadStats(); loadDecks();
+</script>
+</body>
+</html>

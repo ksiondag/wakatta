@@ -29,12 +29,17 @@ from PIL import Image
 from pydantic import BaseModel
 from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, func
 from sqlalchemy.orm import DeclarativeBase, Session
+from dotenv import load_dotenv
 
+import anki_bridge
+import anki_derive
 import ctd
 import dictionary
 import kanji
 import kanjivg_db
 import reading_order
+
+load_dotenv()
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
@@ -659,6 +664,8 @@ async def lifespan(app: FastAPI):
         print(f"[dictionary] {e}")
         print("[dictionary] Dictionary lookups will return 503 until the setup scripts are run.")
 
+    anki_bridge.build_schema(engine)
+
     try:
         await asyncio.to_thread(kanji.build_db, engine)
         await asyncio.to_thread(kanji.build_component_index, engine)
@@ -760,6 +767,9 @@ class SentenceLink(BaseModel):
 
 class WordResolve(BaseModel):
     dict_entry_id: int
+class DeriveRequest(BaseModel):
+    note_ids: list[int]
+    kinds: list[str] = ["audio_writing", "kanji"]
 
 
 class WordLookupCreate(BaseModel):
@@ -848,6 +858,13 @@ def page_reader():
 @app.get("/read/{work_id}")
 def read_work(work_id: int):
     return FileResponse("static/reader.html")
+
+
+@app.get("/anki")
+def anki_browser():
+    return FileResponse("static/anki.html")
+def drill():
+    return FileResponse("static/drill.html")
 
 
 @app.post("/recognize")
@@ -1354,6 +1371,121 @@ def dict_lookup(lemma: str | None = None, surface: str | None = None, reading: s
     if not any([lemma, surface, reading]):
         raise HTTPException(400, "Provide at least one of lemma, surface, reading")
     return dictionary.lookup(engine, lemma=lemma, surface=surface, reading=reading)
+
+
+# ── Routes — Anki bridge ───────────────────────────────────────────────────────
+
+@app.get("/api/anki/stats")
+def anki_stats():
+    return anki_bridge.stats(engine)
+
+
+@app.post("/api/anki/sync")
+async def anki_sync(reindex: bool = True):
+    """Pull from the sync server, then re-project into anki_notes/anki_note_words.
+
+    Both halves are blocking (the Rust backend holds the collection lock, and
+    tokenizing ~5k notes is CPU-bound), so both go to a thread rather than
+    stalling the event loop.
+    """
+    try:
+        result = await asyncio.to_thread(anki_bridge.sync)
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    if reindex:
+        if tagger is None:
+            raise HTTPException(503, "Tokenizer not loaded yet — retry in a moment")
+        result["index"] = await asyncio.to_thread(anki_bridge.rebuild, engine, tagger)
+    return result
+
+
+@app.get("/api/anki/decks")
+def anki_decks(indexed_only: bool = True):
+    if not anki_bridge.is_ready(engine):
+        raise HTTPException(503, "Anki index not built — POST /api/anki/sync first")
+    return anki_bridge.decks(engine, indexed_only=indexed_only)
+
+
+@app.get("/api/anki/notes")
+def anki_notes(deck: str | None = None, notetype: str | None = None,
+               missing_audio: bool = False, leech: bool = False,
+               limit: int = 50, offset: int = 0):
+    if not anki_bridge.is_ready(engine):
+        raise HTTPException(503, "Anki index not built — POST /api/anki/sync first")
+    return anki_bridge.notes(engine, deck=deck, notetype=notetype,
+                             missing_audio=missing_audio, leech=leech,
+                             limit=min(limit, 200), offset=offset)
+def anki_drill(deck: str | None = None, limit: int = 20):
+    if not anki_bridge.is_ready(engine):
+        raise HTTPException(503, "Anki index not built — POST /api/anki/sync first")
+    return anki_derive.drill_items(engine, deck=deck, limit=min(limit, 100))
+def validate_strokes(req: ValidateStrokesRequest):
+    """Grade drawn strokes against the named character's KanjiVG reference."""
+    if kvg_db is None:
+        raise HTTPException(503, "KanjiVG database not loaded")
+    if len(req.char) != 1:
+        raise HTTPException(400, "Validate one character at a time")
+    return stroke_validation.validate(req.char, [s.points for s in req.strokes], kvg_db)
+def anki_sessions(search: str | None = None):
+    """Existing session decks, the available orders, and (with ?search=) a match count."""
+    out = {"decks": anki_review.session_decks(),
+           "orders": sorted(anki_review.ORDERS)}
+    if search:
+        out["preview"] = anki_review.preview_search(search)
+    return out
+def anki_review_decks():
+    """Decks with what the scheduler would serve, for the review deck picker."""
+    return anki_review.decks_with_counts()
+def anki_review_next(deck: str | None = None):
+    return anki_review.next_card(deck)
+@app.get("/api/anki/media/{filename}")
+def anki_media(filename: str):
+    """Serve a note's audio/video by its Anki media filename.
+
+    Playback only — the bridge never writes here, and derived notes reuse existing
+    references rather than adding files.
+    """
+    path = anki_bridge.media_path(filename)
+    if path is None:
+        raise HTTPException(404, "No such media file")
+    return FileResponse(path)
+
+
+@app.get("/api/anki/notes/{note_id}")
+def anki_note(note_id: int):
+    note = anki_bridge.note(engine, note_id)
+    if note is None:
+        raise HTTPException(404, "No such note")
+    return note
+
+
+@app.post("/api/anki/derive/preview")
+async def anki_derive_preview(req: DeriveRequest):
+    """What would be created, without writing. Always run before /apply."""
+    if not anki_bridge.is_ready(engine):
+        raise HTTPException(503, "Anki index not built — POST /api/anki/sync first")
+    plan = await asyncio.to_thread(anki_derive.plan, engine, req.note_ids, req.kinds)
+    return {"total": len(plan), "notes": [d.__dict__ for d in plan]}
+
+
+@app.post("/api/anki/derive/apply")
+async def anki_derive_apply(req: DeriveRequest, push: bool = True):
+    """Write the derived notes, then (by default) sync them up to the server.
+
+    The write and the sync are separate so a failed push leaves the notes safely in
+    the local collection to be retried, rather than half-applied.
+    """
+    if not anki_bridge.is_ready(engine):
+        raise HTTPException(503, "Anki index not built — POST /api/anki/sync first")
+    result = await asyncio.to_thread(anki_derive.apply, engine, req.note_ids, req.kinds)
+    if push and result["created"]:
+        try:
+            result["sync"] = await asyncio.to_thread(anki_bridge.sync)
+        except RuntimeError as e:
+            result["sync"] = {"status": "failed", "detail": str(e)}
+        if tagger is not None:
+            result["index"] = await asyncio.to_thread(anki_bridge.rebuild, engine, tagger)
+    return result
 
 
 @app.get("/api/radicals")
