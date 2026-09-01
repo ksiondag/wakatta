@@ -165,6 +165,24 @@ button.primary { border-color: #7070cc; background: #2e2e56; }
 .charcard svg text { display: none; }
 .grind .model svg text { fill: #8fa8d8; font-size: 7px; stroke: none; }
 
+/* Trace phase: the model sits behind a transparent canvas so the same square is
+   both the thing you're watching and the thing you're drawing on. */
+.tracewrap { position: relative; width: 190px; height: 190px; }
+.tracewrap .ghost {
+  position: absolute; inset: 0;
+  background: #101020; border: 1px solid #3a3a55; border-radius: 8px;
+  pointer-events: none;
+}
+.tracewrap .ghost svg { width: 100%; height: 100%; }
+.grind .model .tracewrap .ghost svg path { stroke: #55557a; stroke-width: 5; }
+.grind .model .tracewrap .ghost svg text { fill: #6a7fa8; font-size: 7px; stroke: none; }
+.tracewrap canvas {
+  position: absolute; inset: 0;
+  width: 190px; height: 190px;
+  background: transparent; border: none;
+  touch-action: none; cursor: crosshair;
+}
+
 .derivebar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
   margin-top: 14px; padding-top: 12px; border-top: 1px solid #333; }
 .derivebar .status { color: #8a8aa8; font-size: 0.82rem; }
@@ -463,26 +481,37 @@ async function renderGrind() {
   }).join('');
 
   if (g.phase === 'study') {
-    const models = await Promise.all(item.chars.map(async ch => {
+    const models = await Promise.all(item.chars.map(async (ch, i) => {
       const [svg, info] = await Promise.all([kanjiSvg(ch), kanjiInfo(ch)]);
-      return `<div class="m"><div class="big">${ch}</div>${svg}${kanjiInfoHtml(info)}</div>`;
+      return `<div class="m">
+        <div class="big">${ch}</div>
+        <div class="tracewrap">
+          <div class="ghost">${svg}</div>
+          <canvas id="tpad${i}"></canvas>
+        </div>
+        ${kanjiInfoHtml(info)}</div>`;
     }));
     $('stage').innerHTML = `
       <div class="grind">
         <div class="head">
           <div class="rep">${item.word}　${item.reading}　${item.meaning}</div>
-          <div class="phase">Study — attempt ${g.rep + 1} of ${GRIND_REPS}</div>
+          <div class="phase">Trace along — attempt ${g.rep + 1} of ${GRIND_REPS}</div>
         </div>
         <div class="model">${models.join('')}</div>
         <div class="controls">
           <button id="gReplay">Replay strokes</button>
+          <button id="gClearTrace">Clear</button>
           <button id="gGo" class="primary">Hide it and write</button>
           <button id="gDone">Stop</button>
         </div>
         <div class="tally">${tally}</div>
       </div>`;
+    // Live canvases over the model: draw along with the animation, at your own pace.
+    // Nothing is graded here — this half is restudy, the writing phase is the test.
+    const tpads = item.chars.map((_, i) => makePad($('tpad' + i)));
     animateStrokes($('stage'));
     $('gReplay').onclick = () => animateStrokes($('stage'));
+    $('gClearTrace').onclick = () => tpads.forEach(p => p.clear());
     $('gGo').onclick = () => { g.phase = 'write'; renderGrind(); };
     $('gDone').onclick = endGrind;
     return;
