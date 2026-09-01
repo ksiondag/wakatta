@@ -38,6 +38,7 @@ import dictionary
 import kanji
 import kanjivg_db
 import reading_order
+import stroke_validation
 
 load_dotenv()
 
@@ -767,6 +768,11 @@ class SentenceLink(BaseModel):
 
 class WordResolve(BaseModel):
     dict_entry_id: int
+class ValidateStrokesRequest(BaseModel):
+    char: str
+    strokes: list[Stroke]
+
+
 class DeriveRequest(BaseModel):
     note_ids: list[int]
     kinds: list[str] = ["audio_writing", "kanji"]
@@ -1419,6 +1425,9 @@ def anki_drill(deck: str | None = None, limit: int = 20):
     if not anki_bridge.is_ready(engine):
         raise HTTPException(503, "Anki index not built — POST /api/anki/sync first")
     return anki_derive.drill_items(engine, deck=deck, limit=min(limit, 100))
+
+
+@app.post("/api/validate-strokes")
 def validate_strokes(req: ValidateStrokesRequest):
     """Grade drawn strokes against the named character's KanjiVG reference."""
     if kvg_db is None:
