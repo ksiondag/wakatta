@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Wakatta — Write Drill</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: sans-serif;
+  font-size: 14px;
+  overscroll-behavior: none;
+}
+
+.layout { display: flex; flex-direction: column; height: 100vh; }
+
+.navbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  background: #12122a;
+  border-bottom: 1px solid #333;
+}
+.navbar a { color: #888; text-decoration: none; font-size: 0.9rem; }
+.navbar a:hover { color: #bbb; }
+.navbar .current { color: #aaa; font-size: 0.9rem; font-weight: 600; }
+.navbar-sep { color: #444; }
+.navbar .spacer { flex: 1; }
+.navbar .progress { color: #777; font-size: 0.8rem; }
+.navbar #deck { max-width: 320px; }
+.navbar select {
+  background: #2a2a3e; color: #ddd; border: 1px solid #555;
+  border-radius: 5px; padding: 6px 8px; font-size: 0.85rem;
+}
+.applied {
+  text-align: center; margin-top: 16px; padding: 10px;
+  border-radius: 6px; background: #1e1e34; border: 1px solid #333;
+}
+.applied .rating { font-size: 1.1rem; font-weight: 600; }
+.applied .rating.again { color: #d69090; }
+.applied .rating.hard  { color: #d9a441; }
+.applied .rating.good  { color: #7fbf7f; }
+.applied .rating.easy  { color: #7fbfd6; }
+.applied .why { color: #8a8aa8; font-size: 0.85rem; margin-top: 3px; }
+
+.session {
+  max-width: 900px; margin: 0 auto 22px; padding: 14px 16px;
+  background: #1e1e34; border: 1px solid #333; border-radius: 8px;
+}
+.session h3 { font-size: 0.85rem; color: #9a9ac0; font-weight: 600; margin-bottom: 10px; }
+.session .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.session input[type=text] {
+  flex: 1; min-width: 260px; padding: 6px 10px; background: #0d0d1a;
+  border: 1px solid #444; border-radius: 5px; color: #ddd; font-size: 0.88rem;
+}
+.session input[type=number] {
+  width: 70px; padding: 6px 8px; background: #0d0d1a; border: 1px solid #444;
+  border-radius: 5px; color: #ddd;
+}
+.session select {
+  background: #2a2a3e; color: #ddd; border: 1px solid #555;
+  border-radius: 5px; padding: 6px 8px; font-size: 0.85rem;
+}
+.session label { color: #999; font-size: 0.85rem; display: flex; align-items: center; gap: 5px; }
+.session .presets button { padding: 4px 10px; font-size: 0.8rem; }
+.session .status { color: #8a8aa8; font-size: 0.82rem; }
+.session .warn { color: #d9a441; font-size: 0.82rem; }
+
+button {
+  padding: 7px 18px;
+  border: 1px solid #555;
+  border-radius: 5px;
+  background: #2a2a3e;
+  color: #ddd;
+  cursor: pointer;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+button:hover { background: #3a3a5e; }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { border-color: #7070cc; background: #2e2e56; }
+
+.main { flex: 1; overflow-y: auto; padding: 24px 20px 60px; }
+.stage { max-width: 900px; margin: 0 auto; }
+
+.prompt { text-align: center; margin-bottom: 22px; }
+.prompt .cue { color: #8a8aa8; font-size: 0.9rem; margin-bottom: 12px; }
+.prompt audio { width: 260px; height: 36px; vertical-align: middle; }
+
+.canvases { display: flex; flex-wrap: wrap; gap: 16px; justify-content: center; }
+.slot { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.pad {
+  width: 190px; height: 190px;
+  background: #101020;
+  border: 1px solid #3a3a55;
+  border-radius: 8px;
+  touch-action: none;
+  cursor: crosshair;
+  display: block;
+}
+.pad.ok { border-color: #4a8a4a; }
+.pad.bad { border-color: #a05555; }
+.slot .idx { color: #6a6a88; font-size: 0.75rem; }
+.slot .verdict { font-size: 0.8rem; min-height: 1.1em; }
+.slot .verdict.ok { color: #7fbf7f; }
+.slot .verdict.bad { color: #d69090; }
+
+.controls { display: flex; gap: 12px; justify-content: center; margin-top: 22px; flex-wrap: wrap; }
+
+.result { max-width: 900px; margin: 22px auto 0; }
+.charcard {
+  background: #1e1e34;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+}
+.charcard .big { font-size: 54px; line-height: 1; }
+.charcard .info { flex: 1; min-width: 0; }
+.charcard .head { color: #ddd; margin-bottom: 6px; }
+.charcard .head .tick { color: #7fbf7f; }
+.charcard .head .cross { color: #d69090; }
+.charcard ul { margin: 4px 0 0 18px; color: #c8a0a0; font-size: 0.88rem; }
+.charcard .strokes { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 8px; }
+.chip {
+  padding: 2px 7px; border-radius: 3px; font-size: 0.75rem;
+  background: #262640; border: 1px solid #3a3a55; color: #9a9ac0;
+}
+.chip.ok { border-color: #4a8a4a; color: #8fbf8f; }
+.chip.order { border-color: #b08840; color: #d9a441; }
+.chip.direction { border-color: #b06a40; color: #d9884a; }
+.chip.shape, .chip.wrong, .chip.extra { border-color: #a05555; color: #d69090; }
+.charcard svg { width: 96px; height: 96px; background: #12122a; border-radius: 6px; }
+
+.answer { text-align: center; margin-top: 18px; }
+.answer .word { font-size: 40px; }
+.answer .reading { color: #9a9ac0; }
+.answer .meaning { color: #b0b0c8; }
+.answer .sentence { color: #8a8aa8; margin-top: 8px; }
+
+
+/* ── Answer breakdown, derive panel, grind ── */
+.kinfo { color: #9a9ac0; font-size: 0.85rem; margin-top: 6px; line-height: 1.5; }
+.kinfo .lab { color: #6a6a88; }
+.kinfo .comp { font-size: 1.05rem; letter-spacing: 3px; color: #c0c0dd; }
+.charcard svg path { fill: none; stroke: #d8d8ea; stroke-width: 4; stroke-linecap: round; }
+
+.derivebar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  margin-top: 14px; padding-top: 12px; border-top: 1px solid #333; }
+.derivebar .status { color: #8a8aa8; font-size: 0.82rem; }
+
+.grind { max-width: 900px; margin: 0 auto; }
+.grind .head { text-align: center; margin-bottom: 16px; }
+.grind .rep { color: #9a9ac0; font-size: 0.9rem; }
+.grind .phase { color: #7fbfd6; font-size: 0.95rem; margin-top: 4px; }
+.grind .model { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; margin: 16px 0; }
+.grind .model .m { text-align: center; }
+.grind .model svg { width: 150px; height: 150px; background: #12122a; border-radius: 8px; }
+.grind .model .big { font-size: 40px; }
+.grind .tally { display: flex; gap: 6px; justify-content: center; margin-top: 14px; }
+.grind .tally span { width: 26px; height: 26px; border-radius: 50%; display: grid;
+  place-items: center; font-size: 0.75rem; border: 1px solid #3a3a55; color: #777; }
+.grind .tally span.pass { border-color: #4a8a4a; color: #8fbf8f; }
+.grind .tally span.fail { border-color: #a05555; color: #d69090; }
+
+.msg { text-align: center; color: #777; padding: 50px 20px; }
+.err { color: #d88; text-align: center; padding: 20px; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="navbar">
+    <a href="/anki">Anki</a>
+    <span class="navbar-sep">/</span>
+    <span class="current">Write Drill</span>
+    <select id="mode">
+      <option value="review">Review (answers the card)</option>
+      <option value="practice">Practice (no scheduling)</option>
+      <option value="session">Session (choose the cards)</option>
+    </select>
+    <select id="deck" title="Which deck to review"></select>
+    <span class="spacer"></span>
+    <span class="progress" id="counts"></span>
+    <span class="progress" id="progress"></span>
+  </div>
+  <div class="main">
+    <div class="stage" id="stage"><div class="msg">Loading…</div></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let queue = [], idx = 0, pads = [], revealed = false;
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+}
+
+// ── Drawing pad ──────────────────────────────────────────────────────────────
+// Strokes are captured in canvas-relative 0..1 coordinates; the server renormalizes
+// the character as a whole, so pad size and where on the pad you draw don't matter.
+function makePad(canvas) {
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.clientWidth * dpr;
+  canvas.height = canvas.clientHeight * dpr;
+  ctx.scale(dpr, dpr);
+  ctx.lineWidth = 6;
+  ctx.lineCap = ctx.lineJoin = 'round';
+  ctx.strokeStyle = '#e8e8f0';
+
+  const state = { strokes: [], current: null };
+
+  const pos = e => {
+    const r = canvas.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+  };
+  const draw = (a, b) => {
+    ctx.beginPath();
+    ctx.moveTo(a.x * canvas.clientWidth, a.y * canvas.clientHeight);
+    ctx.lineTo(b.x * canvas.clientWidth, b.y * canvas.clientHeight);
+    ctx.stroke();
+  };
+
+  canvas.addEventListener('pointerdown', e => {
+    canvas.setPointerCapture(e.pointerId);
+    state.current = [pos(e)];
+    e.preventDefault();
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!state.current) return;
+    const p = pos(e);
+    draw(state.current[state.current.length - 1], p);
+    state.current.push(p);
+    e.preventDefault();
+  });
+  const end = e => {
+    if (!state.current) return;
+    if (state.current.length >= 2) state.strokes.push(state.current);
+    state.current = null;
+    e.preventDefault();
+  };
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
+
+  return {
+    canvas, state,
+    clear() {
+      state.strokes = []; state.current = null;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      canvas.classList.remove('ok', 'bad');
+    },
+    undo() {
+      state.strokes.pop();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (const s of state.strokes) for (let i = 1; i < s.length; i++) draw(s[i - 1], s[i]);
+    },
+  };
+}
+
+
+// ── Kanji breakdown ──────────────────────────────────────────────────────────
+const _kcache = {};
+async function kanjiInfo(ch) {
+  if (ch in _kcache) return _kcache[ch];
+  try { _kcache[ch] = await api(`/api/kanji/${encodeURIComponent(ch)}`); }
+  catch (e) { _kcache[ch] = null; }
+  return _kcache[ch];
+}
+const _scache = {};
+async function kanjiSvg(ch) {
+  if (ch in _scache) return _scache[ch];
+  try {
+    const raw = await (await fetch(`/api/kanji/${encodeURIComponent(ch)}/svg`)).text();
+    // KanjiVG files ship an XML prolog, a licence comment, and a DOCTYPE carrying an
+    // internal DTD subset. innerHTML can't parse that: it swallows the doctype up to
+    // the first '>' and leaves the subset's closing ']>' behind as visible text. Only
+    // the <svg> element itself is wanted.
+    const i = raw.indexOf('<svg');
+    _scache[ch] = i === -1 ? '' : raw.slice(i);
+  } catch (e) { _scache[ch] = ''; }
+  return _scache[ch];
+}
+
+// Reveal strokes one at a time so stroke *order* is visible, not just the shape.
+function animateStrokes(root, ms = 380) {
+  root.querySelectorAll('svg').forEach(svg => {
+    const paths = [...svg.querySelectorAll('path')];
+    paths.forEach(p => {
+      const len = p.getTotalLength ? p.getTotalLength() : 100;
+      p.style.transition = 'none';
+      p.style.strokeDasharray = len; p.style.strokeDashoffset = len;
+    });
+    paths.forEach((p, i) => setTimeout(() => {
+      p.style.transition = `stroke-dashoffset ${ms}ms linear`;
+      p.style.strokeDashoffset = 0;
+    }, i * ms));
+  });
+}
+
+function kanjiInfoHtml(info) {
+  if (!info) return '<div class="kinfo">Not in KANJIDIC2.</div>';
+  const rad = info.radical ? `${info.radical.char} ${info.radical.name}` : '';
+  return `<div class="kinfo">
+    <div>${(info.meanings || []).join(', ')}</div>
+    <div><span class="lab">音</span> ${(info.on || []).join('、') || '—'}
+         <span class="lab">訓</span> ${(info.kun || []).join('、') || '—'}</div>
+    <div><span class="lab">parts</span> <span class="comp">${(info.components || []).join(' ')}</span></div>
+    <div><span class="lab">radical</span> ${rad} · <span class="lab">strokes</span> ${info.stroke_count ?? '?'}</div>
+  </div>`;
+}
+
+// ── Rendering ────────────────────────────────────────────────────────────────
+function render() {
+  const item = queue[idx];
+  revealed = false;
+  $('progress').textContent = `${idx + 1} / ${queue.length}`;
+  $('stage').innerHTML = `
+    <div class="prompt">
+      <div class="cue">Listen, then write what you hear — one character per box.</div>
+      <audio id="cue" controls autoplay src="/api/anki/media/${encodeURIComponent(item.audio)}"></audio>
+    </div>
+    <div class="canvases" id="canvases">
+      ${item.chars.map((_, i) => `
+        <div class="slot">
+          <canvas class="pad" id="pad${i}"></canvas>
+          <div class="idx">character ${i + 1}</div>
+          <div class="verdict" id="v${i}"></div>
+        </div>`).join('')}
+    </div>
+    <div class="controls">
+      <button id="btnUndo">Undo stroke</button>
+      <button id="btnClear">Clear</button>
+      <button id="btnCheck" class="primary">Check</button>
+      <button id="btnReveal">Show answer</button>
+      <button id="btnNext" class="practice-only">Next →</button>
+    </div>
+    <div class="result" id="result"></div>`;
+
+  pads = item.chars.map((_, i) => makePad($('pad' + i)));
+  $('btnUndo').onclick = () => pads.forEach(p => p.undo());
+  $('btnClear').onclick = () => { pads.forEach(p => p.clear()); $('result').innerHTML = ''; };
+  $('btnCheck').onclick = check;
+  $('btnReveal').onclick = () => reveal(null);
+  $('btnNext').onclick = next;
+  if (mode === 'review') $('btnNext').style.display = 'none';
+}
+
+async function check() {
+  const item = queue[idx];
+  const btn = $('btnCheck');
+  btn.disabled = true; btn.textContent = 'Checking…';
+  const results = [];
+  for (let i = 0; i < item.chars.length; i++) {
+    const strokes = pads[i].state.strokes.map(s => ({ points: s }));
+    if (!strokes.length) { results.push(null); continue; }
+    try {
+      results.push(await api('/api/validate-strokes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ char: item.chars[i], strokes }),
+      }));
+    } catch (e) { results.push({ error: e.message }); }
+  }
+  results.forEach((r, i) => {
+    const v = $('v' + i);
+    if (!r) { v.textContent = ''; return; }
+    const good = r.correct;
+    pads[i].canvas.classList.toggle('ok', !!good);
+    pads[i].canvas.classList.toggle('bad', !good);
+    v.className = 'verdict ' + (good ? 'ok' : 'bad');
+    v.textContent = r.error ? r.error : (good ? '✓ correct' : `${r.issues.length} issue(s)`);
+  });
+  btn.disabled = false; btn.textContent = 'Check';
+  await reveal(results);
+  if (mode === 'review' && reviewCard) {
+    await submit({ card_id: reviewCard.card_id, validations: results,
+                   milliseconds: Date.now() - shownAt });
+  }
+}
+
+async function reveal(results) {
+  const item = queue[idx];
+  revealed = true;
+  const noteId = (reviewCard && reviewCard.note_id) || item.note_id;
+  $('result').innerHTML = await breakdownCards(item.chars, results) + `
+    <div class="answer">
+      <div class="word">${item.word}</div>
+      <div class="reading">${item.reading}</div>
+      <div class="meaning">${item.meaning}</div>
+      ${item.sentence ? `<div class="sentence">${item.sentence}</div>` : ''}
+    </div>` + deriveBarHtml(item.chars);
+  animateStrokes($('result'));
+  wireDeriveBar(item, noteId);
+}
+
+// Create cards from the answer screen, for the word actually in front of you.
+async function deriveHere(noteId, kinds) {
+  if (!noteId) { $('dStatus').textContent = 'no note id for this card'; return; }
+  $('dStatus').textContent = 'creating…';
+  try {
+    const r = await api('/api/anki/derive/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note_ids: [noteId], kinds }),
+    });
+    const made = r.notes.filter(d => !d.skipped);
+    const skipped = r.notes.filter(d => d.skipped);
+    $('dStatus').textContent =
+      `${r.created} created` +
+      (skipped.length ? ` · skipped: ${skipped.map(d => d.skipped).join('; ')}` : '') +
+      (r.created ? ' — new cards need new/day > 0 on that deck to appear' : '');
+  } catch (e) { $('dStatus').textContent = e.message; }
+}
+
+
+// ── Grind: restudy -> hide -> write from memory -> check, repeated ───────────
+//
+// The model is hidden during every attempt on purpose. Copying a visible character
+// is restudy; producing it from memory is retrieval, and retrieval is the half that
+// carries the memory benefit. Showing the strokes first and then taking them away is
+// the restudy+retrieval combination, which beats either alone.
+//
+// Nothing here touches scheduling — the card was already answered. This is practice.
+
+const GRIND_REPS = 3;
+let grindState = null;
+
+function startGrind(item) {
+  grindState = { item, rep: 0, results: [], phase: 'study' };
+  renderGrind();
+}
+
+async function renderGrind() {
+  const g = grindState, item = g.item;
+  const tally = Array.from({ length: GRIND_REPS }, (_, i) => {
+    const r = g.results[i];
+    return `<span class="${r === undefined ? '' : r ? 'pass' : 'fail'}">${i + 1}</span>`;
+  }).join('');
+
+  if (g.phase === 'study') {
+    const models = await Promise.all(item.chars.map(async ch => {
+      const [svg, info] = await Promise.all([kanjiSvg(ch), kanjiInfo(ch)]);
+      return `<div class="m"><div class="big">${ch}</div>${svg}${kanjiInfoHtml(info)}</div>`;
+    }));
+    $('stage').innerHTML = `
+      <div class="grind">
+        <div class="head">
+          <div class="rep">${item.word}　${item.reading}　${item.meaning}</div>
+          <div class="phase">Study — attempt ${g.rep + 1} of ${GRIND_REPS}</div>
+        </div>
+        <div class="model">${models.join('')}</div>
+        <div class="controls">
+          <button id="gReplay">Replay strokes</button>
+          <button id="gGo" class="primary">Hide it and write</button>
+          <button id="gDone">Stop</button>
+        </div>
+        <div class="tally">${tally}</div>
+      </div>`;
+    animateStrokes($('stage'));
+    $('gReplay').onclick = () => animateStrokes($('stage'));
+    $('gGo').onclick = () => { g.phase = 'write'; renderGrind(); };
+    $('gDone').onclick = endGrind;
+    return;
+  }
+
+  if (g.phase === 'write') {
+    $('stage').innerHTML = `
+      <div class="grind">
+        <div class="head">
+          <div class="rep">${item.reading}　${item.meaning}</div>
+          <div class="phase">Write it from memory — attempt ${g.rep + 1} of ${GRIND_REPS}</div>
+        </div>
+        <div class="canvases">
+          ${item.chars.map((_, i) => `
+            <div class="slot">
+              <canvas class="pad" id="gpad${i}"></canvas>
+              <div class="idx">character ${i + 1}</div>
+              <div class="verdict" id="gv${i}"></div>
+            </div>`).join('')}
+        </div>
+        <div class="controls">
+          <button id="gUndo">Undo stroke</button>
+          <button id="gClear">Clear</button>
+          <button id="gCheck" class="primary">Check</button>
+          <button id="gDone">Stop</button>
+        </div>
+        <div class="tally">${tally}</div>
+        <div class="result" id="gResult"></div>
+      </div>`;
+    pads = item.chars.map((_, i) => makePad($('gpad' + i)));
+    $('gUndo').onclick = () => pads.forEach(p => p.undo());
+    $('gClear').onclick = () => pads.forEach(p => p.clear());
+    $('gCheck').onclick = checkGrind;
+    $('gDone').onclick = endGrind;
+  }
+}
+
+async function checkGrind() {
+  const g = grindState, item = g.item;
+  const btn = $('gCheck'); btn.disabled = true; btn.textContent = 'Checking…';
+  const results = [];
+  for (let i = 0; i < item.chars.length; i++) {
+    const strokes = pads[i].state.strokes.map(s => ({ points: s }));
+    if (!strokes.length) { results.push(null); continue; }
+    try {
+      results.push(await api('/api/validate-strokes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ char: item.chars[i], strokes }),
+      }));
+    } catch (e) { results.push({ error: e.message }); }
+  }
+  results.forEach((r, i) => {
+    const v = $('gv' + i);
+    const good = r && r.correct;
+    pads[i].canvas.classList.toggle('ok', !!good);
+    pads[i].canvas.classList.toggle('bad', !good);
+    v.className = 'verdict ' + (good ? 'ok' : 'bad');
+    v.textContent = !r ? 'nothing drawn' : r.error ? r.error
+      : good ? '✓' : r.issues.slice(0, 2).join('; ');
+  });
+  const passed = results.length === item.chars.length && results.every(r => r && r.correct);
+  g.results[g.rep] = passed;
+  btn.disabled = false; btn.textContent = 'Check';
+
+  const cards = await Promise.all(item.chars.map(async ch => {
+    const [svg, info] = await Promise.all([kanjiSvg(ch), kanjiInfo(ch)]);
+    return `<div class="charcard"><div class="big">${ch}</div>${svg}
+      <div class="info">${kanjiInfoHtml(info)}</div></div>`;
+  }));
+  const more = g.rep + 1 < GRIND_REPS;
+  $('gResult').innerHTML = cards.join('') +
+    `<div class="controls">
+       <button id="gNext" class="primary">${more ? 'Next attempt' : 'Finish'}</button>
+     </div>`;
+  animateStrokes($('gResult'));
+  document.querySelector('.tally').innerHTML = Array.from({ length: GRIND_REPS }, (_, i) => {
+    const r = g.results[i];
+    return `<span class="${r === undefined ? '' : r ? 'pass' : 'fail'}">${i + 1}</span>`;
+  }).join('');
+  $('gNext').onclick = () => {
+    if (!more) return endGrind();
+    g.rep += 1;
+    // A failed attempt earns the model back; a clean one goes straight to writing.
+    g.phase = passed ? 'write' : 'study';
+    renderGrind();
+  };
+}
+
+function endGrind() {
+  const g = grindState;
+  const passed = g.results.filter(Boolean).length;
+  const done = g.results.filter(r => r !== undefined).length;
+  grindState = null;
+  $('stage').innerHTML = `<div class="msg">Ground ${g.item.word} — ` +
+    `${passed}/${done} attempt(s) clean.<br><br>` +
+    `<button id="gBack" class="primary">Continue reviewing</button></div>`;
+  $('gBack').onclick = () => (mode === 'review' ? startReview(activeDeck) : startPractice());
+}
+
+function next() {
+  if (idx + 1 >= queue.length) {
+    $('stage').innerHTML = '<div class="msg">Done — that\'s the whole queue.</div>';
+    $('progress').textContent = '';
+    return;
+  }
+  idx += 1; render();
+}
+
+const PRESETS = {
+  'Core 2000 leeches':      'deck:"Japanese::Core 2000" tag:leech is:due',
+  'Most-lapsed kanji':      'deck:Japanese::* prop:lapses>8',
+  'Short intervals':        'deck:Japanese::* is:review prop:ivl<21',
+  'Derived writing cards':  'note:"Wakatta Audio Writing"',
+};
+
+async function renderSession() {
+  let info;
+  try { info = await api('/api/anki/session'); }
+  catch (e) { $('stage').innerHTML = `<div class="err">${e.message}</div>`; return; }
+  const existing = info.decks.map(d =>
+    `<div class="status">${d.name} — ${d.cards} card(s), limit ${d.limit}` +
+    `${d.reschedule ? '' : ', <span class="warn">not scheduling</span>'}<br>` +
+    `<code>${d.search}</code></div>`).join('') || '<div class="status">No session decks.</div>';
+  $('stage').innerHTML = `
+    <div class="session">
+      <h3>Build a session</h3>
+      <div class="row presets">
+        ${Object.keys(PRESETS).map(k => `<button data-p="${k}">${k}</button>`).join('')}
+      </div>
+      <div class="row">
+        <input type="text" id="sSearch" placeholder='Anki search, e.g. deck:Japanese::* tag:leech'>
+        <span class="status" id="sMatches"></span>
+      </div>
+      <div class="row">
+        <label>order
+          <select id="sOrder">${info.orders.map(o =>
+            `<option${o === 'relative_overdueness' ? ' selected' : ''}>${o}</option>`).join('')}</select>
+        </label>
+        <label>limit <input type="number" id="sLimit" value="20" min="1" max="500"></label>
+        <label><input type="checkbox" id="sNoResched"> practice only — don't schedule</label>
+        <button id="sBuild" class="primary">Build</button>
+        <button id="sEnd">Return cards home</button>
+      </div>
+      <div class="row"><span class="status warn" id="sWarn"></span></div>
+    </div>
+    <div class="session"><h3>Existing sessions</h3>${existing}</div>`;
+
+  document.querySelectorAll('.presets button').forEach(b => {
+    b.onclick = () => { $('sSearch').value = PRESETS[b.dataset.p]; countMatches(); };
+  });
+  $('sSearch').oninput = () => { clearTimeout(window._t); window._t = setTimeout(countMatches, 400); };
+  $('sBuild').onclick = buildSession;
+  $('sEnd').onclick = endSession;
+}
+
+async function countMatches() {
+  const s = $('sSearch').value.trim();
+  if (!s) { $('sMatches').textContent = ''; return; }
+  const r = await api('/api/anki/session?search=' + encodeURIComponent(s));
+  const p = r.preview;
+  $('sMatches').textContent = p.error ? p.error : `${p.matches} card(s) match`;
+  // Filtered decks ignore the home deck's daily limit, so a big pull is worth naming.
+  const limit = parseInt($('sLimit').value || '0', 10);
+  $('sWarn').textContent = limit > 50
+    ? `${limit} cards bypasses the 50/day limit on the Japanese preset — deliberate?` : '';
+}
+
+async function buildSession() {
+  const btn = $('sBuild'); btn.disabled = true; btn.textContent = 'Building…';
+  try {
+    const r = await api('/api/anki/session', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        search: $('sSearch').value.trim(),
+        limit: parseInt($('sLimit').value, 10),
+        order: $('sOrder').value,
+        reschedule: !$('sNoResched').checked,
+      }),
+    });
+    SESSION_DECK = r.deck;
+    if (!r.cards) { $('sWarn').textContent = 'That search pulled in no cards.'; }
+    else { mode = 'review'; $('mode').value = 'review'; startReview(r.deck); return; }
+  } catch (e) { $('sWarn').textContent = e.message; }
+  btn.disabled = false; btn.textContent = 'Build';
+}
+
+async function endSession() {
+  try {
+    const r = await api('/api/anki/session?name=' + encodeURIComponent(SESSION_DECK),
+                        { method: 'DELETE' });
+    $('sWarn').textContent = `Returned ${r.returned} card(s) to their home decks.`;
+    renderSession();
+  } catch (e) { $('sWarn').textContent = e.message; }
+}
+
+let SESSION_DECK = 'Wakatta Drill';
+let mode = new URLSearchParams(location.search).get('mode') || 'review';
+let reviewCard = null, shownAt = 0, activeDeck = null;
+const REVIEW_DECK = 'Japanese::Wakatta::Audio Writing';
+
+async function startPractice() {
+  try { queue = await api('/api/anki/drill?limit=20'); }
+  catch (e) { $('stage').innerHTML = `<div class="err">${e.message}</div>`; return; }
+  if (!queue.length) {
+    $('stage').innerHTML = '<div class="msg">Nothing to drill — no notes with both a word and audio.</div>';
+    return;
+  }
+  idx = 0; render();
+}
+
+// Anki stores media as [sound:file.ext] whatever the type — movies2anki uses it for
+// video too — so the element is chosen by extension, not by the tag.
+const VIDEO_EXT = ['mp4', 'webm', 'mov', 'mkv', 'avi'];
+
+// Anki leaves [anki:play:q:N] / [anki:play:a:N] in rendered HTML for its own client
+// to substitute; the indices point into the card's av tag lists.
+function withPlayTags(html, qav, aav) {
+  return (html || '').replace(/\[anki:play:([qa]):(\d+)\]/g, (_, side, i) => {
+    const file = ((side === 'q' ? qav : aav) || [])[+i];
+    if (!file) return '';
+    const src = `/api/anki/media/${encodeURIComponent(file)}`;
+    const ext = file.split('.').pop().toLowerCase();
+    return VIDEO_EXT.includes(ext)
+      ? `<video controls preload="none" src="${src}"></video>`
+      : `<audio controls preload="none" src="${src}"></audio>`;
+  });
+}
+
+// Shared by both review paths: the per-character breakdown, and the bar that turns
+// the card in front of you into new cards or a grind.
+async function breakdownCards(chars, results) {
+  return (await Promise.all(chars.map(async (ch, i) => {
+    const r = results && results[i];
+    const [svg, info] = await Promise.all([kanjiSvg(ch), kanjiInfo(ch)]);
+    let head = '', list = '', chips = '';
+    if (r) {
+      if (r.error) head = `<span class="cross">${r.error}</span>`;
+      else {
+        head = r.correct
+          ? `<span class="tick">✓ correct — ${r.expected_strokes} strokes, right order</span>`
+          : `<span class="cross">✗ ${r.drawn_strokes} of ${r.expected_strokes} strokes</span>`;
+        list = r.issues.length ? `<ul>${r.issues.map(t => `<li>${t}</li>`).join('')}</ul>` : '';
+        chips = `<div class="strokes">${r.strokes.map(s =>
+          `<span class="chip ${s.verdict}">${s.drawn + 1}${
+            s.expected !== null && s.expected !== s.drawn ? `→${s.expected + 1}` : ''}</span>`).join('')}</div>`;
+      }
+    }
+    return `<div class="charcard"><div class="big">${ch}</div>${svg}
+      <div class="info">${head ? `<div class="head">${head}</div>` : ''}${list}${chips}
+        ${kanjiInfoHtml(info)}</div></div>`;
+  }))).join('');
+}
+
+function deriveBarHtml(chars) {
+  return `<div class="derivebar">
+      <button id="dReplay">↻ replay strokes</button>
+      <button id="dWrite">+ writing card</button>
+      <button id="dKanji">+ kanji card${chars.length > 1 ? 's' : ''}</button>
+      <button id="dGrind" class="primary">Grind this word</button>
+      <span class="status" id="dStatus"></span>
+    </div>`;
+}
+
+function wireDeriveBar(item, noteId) {
+  if (!$('dWrite')) return;
+  const scope = $('dWrite').closest('.result') || document;
+  $('dReplay').onclick = () => animateStrokes(scope);
+  // Clicking one character replays just that character.
+  scope.querySelectorAll('.charcard').forEach(card => {
+    card.style.cursor = 'pointer';
+    card.title = 'click to replay stroke order';
+    card.onclick = () => animateStrokes(card);
+  });
+  $('dWrite').onclick = () => deriveHere(noteId, ['audio_writing']);
+  $('dKanji').onclick = () => deriveHere(noteId, ['kanji']);
+  $('dGrind').onclick = () => startGrind(item);
+}
+
+async function loadDeckPicker(preferred) {
+  let decks = [];
+  try { decks = await api('/api/anki/review/decks'); } catch (e) { return null; }
+  const usable = decks.filter(d => d.new + d.learning + d.review > 0 || d.filtered);
+  const sel = $('deck');
+  sel.innerHTML = usable.map(d =>
+    `<option value="${d.name}">${d.name} — ${d.review + d.learning + d.new}` +
+    `${d.filtered ? ' (session)' : ''}</option>`).join('');
+  // Prefer the derived writing deck, then a session deck, then whatever has work.
+  const pick = [preferred, REVIEW_DECK, SESSION_DECK]
+    .find(n => n && usable.some(d => d.name === n)) || (usable[0] && usable[0].name);
+  if (pick) sel.value = pick;
+  sel.style.display = usable.length ? '' : 'none';
+  return pick || null;
+}
+
+async function startReview(deck) {
+  const target = deck || await loadDeckPicker(deck) || REVIEW_DECK;
+  $('deck').value = target;
+  let r;
+  try { r = await api(`/api/anki/review/next?deck=${encodeURIComponent(target)}`); }
+  catch (e) { $('stage').innerHTML = `<div class="err">${e.message}</div>`; return; }
+  if (r.error) {
+    // A missing deck here is almost always "nothing derived yet", not a real error.
+    $('stage').innerHTML = `<div class="msg">Nothing to review in <code>${target}</code>.<br><br>` +
+      `Derived writing cards are created from the <a href="/anki">Anki browser</a> — ` +
+      `pick a note, then Preview and Create.<br>Or switch to <b>Session</b> above to ` +
+      `choose any cards you like.</div>`;
+    return;
+  }
+  $('counts').textContent = `new ${r.counts.new} · learning ${r.counts.learning} · due ${r.counts.review}`;
+  if (!r.card) {
+    $('stage').innerHTML = `<div class="msg">Nothing due in <code>${target}</code>.<br><br>` +
+      `If you've just derived cards, the deck inherits <code>new/day = 0</code> from the ` +
+      `Japanese preset — raise it, or give the subdeck its own preset.</div>`;
+    return;
+  }
+  activeDeck = target;
+  reviewCard = r.card;
+  if (reviewCard.interaction === 'audio_writing') {
+    queue = [reviewCard]; idx = 0; render(); shownAt = Date.now();
+  } else {
+    renderSelfGraded(reviewCard);
+  }
+}
+
+function renderSelfGraded(card) {
+  shownAt = Date.now();
+  $('progress').textContent = '';
+  $('stage').innerHTML = `
+    <div class="prompt"><div class="cue">${card.deck} · ${card.notetype}</div></div>
+    <div class="result">${withPlayTags(card.question, card.question_av, card.answer_av)}</div>
+    <div class="controls"><button id="btnShow" class="primary">Show answer</button></div>
+    <div class="result" id="graded"></div>`;
+  $('btnShow').onclick = async () => {
+    $('graded').innerHTML = withPlayTags(card.answer, card.question_av, card.answer_av);
+    $('stage').querySelector('.controls').innerHTML =
+      ['again', 'hard', 'good', 'easy'].map((r, i) =>
+        `<button data-r="${r}">${r} <span class="k">${card.next_states[i] || ''}</span></button>`).join('');
+    $('stage').querySelectorAll('.controls button').forEach(b => {
+      b.onclick = () => submit({ card_id: card.card_id, rating: b.dataset.r,
+                                milliseconds: Date.now() - shownAt });
+    });
+    // Every card type gets the breakdown, not just the ones drilled on canvas —
+    // this is the path a normal Core 2000 review takes.
+    if (card.chars.length) {
+      const extra = document.createElement('div');
+      extra.className = 'result';
+      extra.innerHTML = await breakdownCards(card.chars, null) + deriveBarHtml(card.chars);
+      $('stage').appendChild(extra);
+      animateStrokes(extra);
+      wireDeriveBar(card, card.note_id);
+    }
+  };
+}
+
+async function submit(payload) {
+  let res;
+  try {
+    res = await api('/api/anki/review/answer', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch (e) {
+    $('result').innerHTML = `<div class="err">${e.message}</div>`;
+    return;
+  }
+  const box = document.createElement('div');
+  box.className = 'applied';
+  box.innerHTML = `<div class="rating ${res.rating}">${res.rating.toUpperCase()}` +
+    `${res.interval ? ` · next in ${res.interval}` : ''}</div>` +
+    `<div class="why">${res.reason || 'graded by you'}</div>` +
+    (res.quality ? `<div class="why">writing: ${res.quality}` +
+      `${res.worst_distance != null ? ` (worst stroke ${res.worst_distance})` : ''}` +
+      ` — not counted toward the grade</div>` : '');
+  $('stage').appendChild(box);
+  const nb = document.createElement('div');
+  nb.className = 'controls';
+  nb.innerHTML = '<button class="primary" id="btnCont">Next card →</button>';
+  $('stage').appendChild(nb);
+  $('btnCont').onclick = () => startReview(activeDeck);
+}
+
+$('deck').onchange = () => { if (mode === 'review') startReview($('deck').value); };
+
+$('mode').onchange = () => {
+  mode = $('mode').value;
+  history.replaceState(null, '', `?mode=${mode}`);
+  $('counts').textContent = '';
+  $('deck').style.display = mode === 'review' ? '' : 'none';
+  mode === 'review' ? startReview() : mode === 'session' ? renderSession() : startPractice();
+};
+
+$('mode').value = mode;
+$('deck').style.display = mode === 'review' ? '' : 'none';
+mode === 'review' ? startReview() : mode === 'session' ? renderSession() : startPractice();
+</script>
+</body>
+</html>
