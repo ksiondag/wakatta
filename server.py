@@ -33,6 +33,7 @@ from dotenv import load_dotenv
 
 import anki_bridge
 import anki_derive
+import anki_review
 import ctd
 import dictionary
 import kanji
@@ -768,6 +769,23 @@ class SentenceLink(BaseModel):
 
 class WordResolve(BaseModel):
     dict_entry_id: int
+
+
+class ReviewAnswer(BaseModel):
+    card_id: int
+    rating: str | None = None                 # explicit, for self-graded interactions
+    validations: list[dict] | None = None     # per-character stroke validation results
+    milliseconds: int = 0
+
+
+class SessionRequest(BaseModel):
+    search: str
+    name: str = anki_review.DEFAULT_SESSION_DECK
+    limit: int = 20
+    order: str = "relative_overdueness"
+    reschedule: bool = True
+
+
 class ValidateStrokesRequest(BaseModel):
     char: str
     strokes: list[Stroke]
@@ -869,6 +887,9 @@ def read_work(work_id: int):
 @app.get("/anki")
 def anki_browser():
     return FileResponse("static/anki.html")
+
+
+@app.get("/drill")
 def drill():
     return FileResponse("static/drill.html")
 
@@ -1421,6 +1442,9 @@ def anki_notes(deck: str | None = None, notetype: str | None = None,
     return anki_bridge.notes(engine, deck=deck, notetype=notetype,
                              missing_audio=missing_audio, leech=leech,
                              limit=min(limit, 200), offset=offset)
+
+
+@app.get("/api/anki/drill")
 def anki_drill(deck: str | None = None, limit: int = 20):
     if not anki_bridge.is_ready(engine):
         raise HTTPException(503, "Anki index not built — POST /api/anki/sync first")
@@ -1435,6 +1459,9 @@ def validate_strokes(req: ValidateStrokesRequest):
     if len(req.char) != 1:
         raise HTTPException(400, "Validate one character at a time")
     return stroke_validation.validate(req.char, [s.points for s in req.strokes], kvg_db)
+
+
+@app.get("/api/anki/session")
 def anki_sessions(search: str | None = None):
     """Existing session decks, the available orders, and (with ?search=) a match count."""
     out = {"decks": anki_review.session_decks(),
@@ -1442,11 +1469,89 @@ def anki_sessions(search: str | None = None):
     if search:
         out["preview"] = anki_review.preview_search(search)
     return out
+
+
+@app.post("/api/anki/session")
+async def anki_session_build(req: SessionRequest, push: bool = True):
+    """Build (or rebuild) a filtered deck from an arbitrary search.
+
+    Filtered decks ignore the home deck's daily limits — the `limit` here is the only
+    cap — so this is the one place in the app that can hand you more cards in a day
+    than the Japanese preset allows. `reschedule=False` studies without writing any
+    scheduling change at all.
+    """
+    result = await asyncio.to_thread(
+        anki_review.build_session, req.search, name=req.name, limit=req.limit,
+        order=req.order, reschedule=req.reschedule)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    if push:
+        try:
+            result["sync"] = await asyncio.to_thread(anki_bridge.sync)
+        except RuntimeError as e:
+            result["sync"] = {"status": "failed", "detail": str(e)}
+    return result
+
+
+@app.delete("/api/anki/session")
+async def anki_session_end(name: str = anki_review.DEFAULT_SESSION_DECK,
+                           delete: bool = False, push: bool = True):
+    """Send a session's cards back to their home decks."""
+    result = await asyncio.to_thread(anki_review.end_session, name, delete)
+    if result.get("error"):
+        raise HTTPException(404, result["error"])
+    if push:
+        try:
+            result["sync"] = await asyncio.to_thread(anki_bridge.sync)
+        except RuntimeError as e:
+            result["sync"] = {"status": "failed", "detail": str(e)}
+    return result
+
+
+@app.get("/api/anki/review/decks")
 def anki_review_decks():
     """Decks with what the scheduler would serve, for the review deck picker."""
     return anki_review.decks_with_counts()
+
+
+@app.get("/api/anki/review/next")
 def anki_review_next(deck: str | None = None):
     return anki_review.next_card(deck)
+
+
+@app.post("/api/anki/review/answer")
+async def anki_review_answer(req: ReviewAnswer, push: bool = True):
+    """Answer a card, rating it from the interaction's observations where it can.
+
+    `validations` wins over `rating`: the whole point is that a production card is
+    graded by what was measured, not by what the reviewer thought of it.
+    """
+    graded = None
+    rating = req.rating
+    if req.validations is not None:
+        graded = anki_review.grade(req.validations)
+        rating = graded["rating"]
+    if rating is None:
+        raise HTTPException(400, "Provide either rating or validations")
+
+    result = await asyncio.to_thread(
+        anki_review.answer, req.card_id, rating, req.milliseconds)
+    if result.get("error"):
+        raise HTTPException(409, result["error"])
+    if graded:
+        # Quality is reported, never graded on — see anki_review.grade().
+        result["reason"] = graded["reason"]
+        result["quality"] = graded["quality"]
+        result["worst_distance"] = graded["worst_distance"]
+        result["off_shape_strokes"] = graded.get("off_shape_strokes", 0)
+    if push:
+        try:
+            result["sync"] = await asyncio.to_thread(anki_bridge.sync)
+        except RuntimeError as e:
+            result["sync"] = {"status": "failed", "detail": str(e)}
+    return result
+
+
 @app.get("/api/anki/media/{filename}")
 def anki_media(filename: str):
     """Serve a note's audio/video by its Anki media filename.
