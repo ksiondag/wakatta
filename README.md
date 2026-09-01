@@ -299,6 +299,35 @@ SegmentationOverride              ← implemented (user-defined tokenizer correc
       client wins for `user_text` edits made offline.
 - [x] **Upload UI** — file browser uploads PDF to `data/uploads/` and triggers ingestion in one step
 
+### Audio — Deferred
+
+- [ ] **Synthesized word audio for decks that have none** — DaKanji (0/308 notes) and the
+      JLPT N4 deck (0/640) carry no audio at all, so no listening or write-from-audio card
+      can be built from them. Deferred deliberately: mining real audio from video is both
+      more useful and more pleasant than synthesis, and reading practice covers pitch
+      well enough in the meantime.
+
+      If it does get built, the approach is decided. **VOICEVOX** (`voicevox_engine`, local,
+      free, Docker) rather than a cloud TTS, for one reason: isolated words are the worst
+      case for Japanese pitch accent — はし is 橋 (accent 2) or 箸 (accent 1) with no
+      sentence to disambiguate — and VOICEVOX's `/audio_query` exposes an editable accent
+      position per accent phrase, so the accent can be *set* rather than guessed. The
+      correct values are already here: `pitch_accents` holds 124,137 Kanjium entries and
+      covers 98% of the JLPT deck and 97% of DaKanji. Cloud engines sound better and offer
+      no accent control, which is the wrong trade when the audio is meant to teach pitch.
+
+      Prefer real recordings wherever they exist (JapanesePod101, Forvo) and synthesize
+      only the remainder; a human recording is correct by definition.
+
+      **Architectural consequence:** this is the first feature that would *add* media
+      files. Everything in the Anki bridge so far reuses `[sound:...]` references that
+      already exist in the collection, which is why the bridge syncs the collection but
+      not media. Generated audio would need `col.media.add_file()` plus a real
+      `sync_media()` to reach the iPad.
+
+      Verify a sample by ear before generating in bulk — a wrong accent drilled 200 times
+      is worse than no audio at all.
+
 ### Quality
 - [x] **Page transcription UI** — page reader with SVG bbox overlay; click a region to
       transcribe its text via handwriting input when OCR fails or is wrong
