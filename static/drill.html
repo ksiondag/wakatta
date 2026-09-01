@@ -152,7 +152,18 @@ button.primary { border-color: #7070cc; background: #2e2e56; }
 .kinfo { color: #9a9ac0; font-size: 0.85rem; margin-top: 6px; line-height: 1.5; }
 .kinfo .lab { color: #6a6a88; }
 .kinfo .comp { font-size: 1.05rem; letter-spacing: 3px; color: #c0c0dd; }
-.charcard svg path { fill: none; stroke: #d8d8ea; stroke-width: 4; stroke-linecap: round; }
+/* KanjiVG hard-codes stroke:#000000 inline on its path group, which is invisible on
+   a dark background — every place a KanjiVG svg is shown needs this override, not
+   just the answer cards. */
+.charcard svg path,
+.grind .model svg path {
+  fill: none; stroke: #d8d8ea; stroke-width: 4;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+/* KanjiVG also ships stroke-number labels in a second group. Unreadable at charcard
+   size, genuinely useful at drill size where you're studying the order. */
+.charcard svg text { display: none; }
+.grind .model svg text { fill: #8fa8d8; font-size: 7px; stroke: none; }
 
 .derivebar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
   margin-top: 14px; padding-top: 12px; border-top: 1px solid #333; }
