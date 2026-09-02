@@ -656,7 +656,8 @@ async function renderSession() {
         ${Object.keys(PRESETS).map(k => `<button data-p="${k}">${k}</button>`).join('')}
       </div>
       <div class="row">
-        <input type="text" id="sSearch" placeholder='Anki search, e.g. deck:Japanese::* tag:leech'>
+        <input type="text" id="sSearch" value='deck:Japanese::* is:due'
+               placeholder='Anki search, e.g. deck:Japanese::* tag:leech'>
         <span class="status" id="sMatches"></span>
       </div>
       <div class="row">
@@ -686,7 +687,9 @@ async function countMatches() {
   if (!s) { $('sMatches').textContent = ''; return; }
   const r = await api('/api/anki/session?search=' + encodeURIComponent(s));
   const p = r.preview;
-  $('sMatches').textContent = p.error ? p.error : `${p.matches} card(s) match`;
+  $('sMatches').textContent = p.error ? p.error
+    : `${p.matches} card(s) match` +
+      (p.outside_japanese ? ` — ${p.outside_japanese} outside Japanese::` : '');
   // Filtered decks ignore the home deck's daily limit, so a big pull is worth naming.
   const limit = parseInt($('sLimit').value || '0', 10);
   $('sWarn').textContent = limit > 50
@@ -860,9 +863,14 @@ function renderSelfGraded(card) {
     <div class="result" id="graded"></div>`;
   $('btnShow').onclick = async () => {
     $('graded').innerHTML = withPlayTags(card.answer, card.question_av, card.answer_av);
+    // Again and Good only, matching how validated handwriting is graded. SM-2 moves
+    // ease permanently on Hard (-15pp) and Easy (+15pp) against a 130% floor, and a
+    // third of this collection already sits on that floor — offering the buttons on
+    // one path while refusing to emit them on the other was just inconsistent.
     $('stage').querySelector('.controls').innerHTML =
-      ['again', 'hard', 'good', 'easy'].map((r, i) =>
-        `<button data-r="${r}">${r} <span class="k">${card.next_states[i] || ''}</span></button>`).join('');
+      [['again', 0], ['good', 2]].map(([r, i]) =>
+        `<button data-r="${r}" class="${r === 'good' ? 'primary' : ''}">${r} ` +
+        `<span class="k">${card.next_states[i] || ''}</span></button>`).join('');
     $('stage').querySelectorAll('.controls button').forEach(b => {
       b.onclick = () => submit({ card_id: card.card_id, rating: b.dataset.r,
                                 milliseconds: Date.now() - shownAt });

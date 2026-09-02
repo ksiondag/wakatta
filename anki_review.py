@@ -255,10 +255,18 @@ def session_decks() -> list[dict]:
 
 
 def preview_search(search: str) -> dict:
-    """How many cards a search matches, before committing to a session."""
+    """How many cards a search matches, before committing to a session.
+
+    Also counts how many fall outside the Japanese tree. A search like `deck:*`
+    looks harmless and quietly drags in whatever else lives in the collection —
+    worth seeing before a session is built, not after.
+    """
     with anki_bridge.open_collection() as col:
         try:
-            return {"search": search, "matches": len(col.find_cards(search))}
+            matched = col.find_cards(search)
+            japanese = set(col.find_cards("deck:Japanese::*"))
+            return {"search": search, "matches": len(matched),
+                    "outside_japanese": sum(1 for c in matched if c not in japanese)}
         except Exception as e:
             return {"search": search, "error": str(e)}
 
@@ -268,6 +276,8 @@ def build_session(search: str, *, name: str = DEFAULT_SESSION_DECK, limit: int =
     """Create or rebuild a filtered deck from an arbitrary search."""
     if order not in ORDERS:
         return {"error": f"unknown order: {order}"}
+    if not search.strip():
+        return {"error": "a session needs a search — an empty one matches the whole collection"}
     with anki_bridge.open_collection() as col:
         existing = col.decks.id_for_name(name)
         fd = col.sched.get_or_create_filtered_deck(deck_id=existing or 0)

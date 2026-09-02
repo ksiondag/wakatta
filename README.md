@@ -299,6 +299,25 @@ SegmentationOverride              ← implemented (user-defined tokenizer correc
       client wins for `user_text` edits made offline.
 - [x] **Upload UI** — file browser uploads PDF to `data/uploads/` and triggers ingestion in one step
 
+### Card design — Deferred
+
+- [ ] **The imported vocabulary cards do two jobs at once** — a Core 2000 or JLPT card
+      asks for the reading *and* the English meaning on one card, and for a single-kanji
+      note the reading question and the meaning question are different skills that decay
+      at different rates. Wozniak's minimum information principle says split them; the
+      cost is roughly doubling the card count for words already known, so the split
+      probably wants to be earned (on failure) rather than applied wholesale.
+      Related: the interference clusters below.
+
+- [ ] **Interference sessions** — 52% of the 338 Japanese leeches are two-kanji compounds,
+      and they cluster on a shared character (発: 開発 発生 発言 発見 発表; 対: 対立 対策
+      対象 絶対に). Reviewing them weeks apart in isolation never builds a boundary
+      between them. The remedy the research points at is to contrast the set explicitly,
+      then test with the siblings visible as distractors. `anki_note_words` can generate
+      a cluster from a shared kanji, and filtered-deck sessions can then keep it together.
+      Trigger on failure of a *known* word — interleaving near-neighbours before each is
+      individually solid makes things worse.
+
 ### Audio — Deferred
 
 - [ ] **Synthesized word audio for decks that have none** — DaKanji (0/308 notes) and the
