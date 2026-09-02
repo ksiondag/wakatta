@@ -408,6 +408,7 @@ input:focus { outline: none; border-color: #7070cc; }
 .kanji-kun { color: #a8a8dd; font-size: 0.9rem; }
 .kanji-meanings { margin: 6px 0; font-size: 0.85rem; line-height: 1.4; }
 .kanji-radical, .kanji-components { color: #999; font-size: 0.8rem; margin: 3px 0; }
+.kanji-part-label { color: #6f6f8a; }
 .kanji-radical-char { color: #ddd; font-size: 0.95rem; }
 .kanji-meta { color: #777; font-size: 0.75rem; margin: 4px 0; }
 .kanji-stroke-wrap { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
@@ -1923,9 +1924,14 @@ function renderKanjiCard(char, data) {
   const radical = data.radical?.char
     ? `<div class="kanji-radical">Radical: <span class="kanji-radical-char">${data.radical.char}</span> ${data.radical.name || ''} (#${data.radical.number})</div>`
     : '';
-  const components = (data.components || []).filter(c => c !== data.radical?.char);
+  const components = (data.component_details || [])
+    .filter(c => c.char !== data.radical?.char);
   const componentsHtml = components.length
-    ? `<div class="kanji-components">Components: ${components.join(' ')}</div>` : '';
+    ? `<div class="kanji-components">Components: ` +
+      components.map(c => `${c.char}<span class="kanji-part-label">` +
+                          `${c.label ? ' ' + c.label : ''}</span>`).join('　') +
+      `</div>`
+    : '';
   const meta = [
     data.grade ? `Grade ${data.grade}` : null,
     data.jlpt ? `JLPT N${data.jlpt}` : null,

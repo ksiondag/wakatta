@@ -165,7 +165,9 @@ button.primary { border-color: #7070cc; background: #2e2e56; }
 /* ── Answer breakdown, derive panel, grind ── */
 .kinfo { color: #9a9ac0; font-size: 0.85rem; margin-top: 6px; line-height: 1.5; }
 .kinfo .lab { color: #6a6a88; }
-.kinfo .comp { font-size: 1.05rem; letter-spacing: 3px; color: #c0c0dd; }
+.kinfo .comp { font-size: 1.05rem; color: #c0c0dd; }
+.kinfo .part { display: inline-flex; align-items: baseline; gap: 4px; margin-right: 10px; }
+.kinfo .partlab { color: #7a7a9a; font-size: 0.78rem; }
 /* KanjiVG hard-codes stroke:#000000 inline on its path group, which is invisible on
    a dark background — every place a KanjiVG svg is shown needs this override, not
    just the answer cards. */
@@ -356,6 +358,16 @@ function animateStrokes(root, ms = 380) {
   });
 }
 
+// Each component gets its English keyword, not just the dictionary radical — the
+// parts are what a mnemonic is built out of, so an unnamed glyph is no use.
+function partsHtml(info) {
+  const parts = info.component_details || [];
+  if (!parts.length) return '<span class="comp">—</span>';
+  return parts.map(c =>
+    `<span class="part"><span class="comp">${c.char}</span>` +
+    `<span class="partlab">${c.label || '?'}</span></span>`).join('');
+}
+
 function kanjiInfoHtml(info) {
   if (!info) return '<div class="kinfo">Not in KANJIDIC2.</div>';
   const rad = info.radical ? `${info.radical.char} ${info.radical.name}` : '';
@@ -363,7 +375,7 @@ function kanjiInfoHtml(info) {
     <div>${(info.meanings || []).join(', ')}</div>
     <div><span class="lab">音</span> ${(info.on || []).join('、') || '—'}
          <span class="lab">訓</span> ${(info.kun || []).join('、') || '—'}</div>
-    <div><span class="lab">parts</span> <span class="comp">${(info.components || []).join(' ')}</span></div>
+    <div><span class="lab">parts</span> ${partsHtml(info)}</div>
     <div><span class="lab">radical</span> ${rad} · <span class="lab">strokes</span> ${info.stroke_count ?? '?'}</div>
   </div>`;
 }

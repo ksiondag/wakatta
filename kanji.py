@@ -204,7 +204,7 @@ def build_db(engine: Engine, force: bool = False) -> None:
     print(f"[kanji] Loaded {len(kanjidic)} KANJIDIC2 entries.")
 
 
-def lookup(engine: Engine, char: str) -> dict | None:
+def lookup(engine: Engine, char: str, with_components: bool = True) -> dict | None:
     with engine.connect() as conn:
         row = conn.execute(
             text("SELECT data FROM kanji_entries WHERE char = :c"), {"c": char}
@@ -212,7 +212,22 @@ def lookup(engine: Engine, char: str) -> dict | None:
     if row is None:
         return None
     data = json.loads(row[0])
-    return {"char": char, **data}
+    out = {"char": char, **data}
+    if with_components:
+        # `components` stays as KRADFILE spells it, because that is what the
+        # by-components search matches on. `component_details` is the readable
+        # version: the glyph actually written, plus an English keyword for each.
+        # with_components=False breaks the recursion, since labelling a component
+        # calls back into lookup().
+        out["component_details"] = [
+            {
+                "char": _COMPONENT_DISPLAY.get(c, c),
+                "kradfile_char": c,
+                "label": component_label(engine, _COMPONENT_DISPLAY.get(c, c)),
+            }
+            for c in (data.get("components") or [])
+        ]
+    return out
 
 
 # KRADFILE decomposes kanji using only JIS X 0208 characters, so radicals not
@@ -232,6 +247,45 @@ _RADICAL_VARIANT_ALIASES: dict[str, str] = {
     "辶": "込",
     "艹": "艾",
 }
+
+# The reverse of _RADICAL_VARIANT_ALIASES: what to *show* for a KRADFILE stand-in.
+# Matching a drawn radical needs the stand-in, but telling a reader that 渇 is built
+# from 汁 ("soup") rather than 氵 is simply false.
+_COMPONENT_DISPLAY: dict[str, str] = {v: k for k, v in _RADICAL_VARIANT_ALIASES.items()}
+
+# Those compact forms are not Kangxi radicals in their own right, so they need
+# pointing at the radical they are a form of before they can be named.
+_VARIANT_RADICAL_NUMBER: dict[str, int] = {
+    "氵": 85,   # 水 water
+    "忄": 61,   # 心 heart
+    "扌": 64,   # 手 hand
+    "辶": 162,  # 辵 walk
+    "艹": 140,  # 艸 grass
+}
+
+_RADICAL_NAME_BY_CHAR: dict[str, str] = {
+    char: name for char, name in KANGXI_RADICALS.values()
+}
+
+
+def component_label(engine: Engine, char: str) -> str | None:
+    """A short English keyword for one component of a kanji.
+
+    Radical keywords are preferred over dictionary meanings where both exist: a
+    component is being named for mnemonic purposes, and "cliff" is more use than
+    "cliff, factory" — but a component that is an ordinary kanji (白, 青) has no
+    radical name and its KANJIDIC2 meaning is exactly right.
+    """
+    number = _VARIANT_RADICAL_NUMBER.get(char)
+    if number is not None:
+        return KANGXI_RADICALS[number][1]
+    if char in _RADICAL_NAME_BY_CHAR:
+        return _RADICAL_NAME_BY_CHAR[char]
+    entry = lookup(engine, char, with_components=False)
+    if entry and entry.get("meanings"):
+        return ", ".join(entry["meanings"][:2])
+    return None
+
 
 _component_index: dict[str, set[str]] | None = None
 
