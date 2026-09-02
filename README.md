@@ -144,6 +144,71 @@ character appends it to "Your text":
     is itself a signal that this is where the read went wrong
   - Read-only: nothing is saved until a character is clicked
 
+### Anki Bridge (`anki_bridge.py` + `anki_derive.py` + `anki_review.py` + `static/anki.html` + `static/drill.html`)
+
+Wakatta does not schedule its own cards. A self-hosted Anki sync server holds the
+collection (4.7k notes, 140k+ reviews of history), and the bridge keeps a private copy
+under `data/anki/` that syncs against it as just another client — the same standing as
+the desktop app or a phone. Credentials come from `.env`; see `.env.example`.
+
+- **Projection** — notes are mirrored into `anki_notes` / `anki_note_words`, raw-SQL
+  tables following the same convention as `dictionary.py`'s and `kanji.py`'s reference
+  data: decoupled from the ORM, wiped and rebuilt rather than migrated. Anki-derived
+  tokens dedupe into the canonical `words` table, so a word met on a manga page and the
+  same word in a Core 2000 note are one identity.
+- **A per-notetype field map** (`anki_bridge._FIELD_MAP`) decides what to index and as
+  what role (`word` vs `sentence`). Load-bearing, not tidiness: Core 2000 repeats each
+  example sentence four times over, and indexing all of them counted every word three or
+  four times. Subtitle notes also carry parenthesised furigana and sound-effect captions
+  that wreck tokenization if left in.
+- **Browser** (`/anki`) — decks, notes, fields, and the tokens extracted from each, with
+  filters for leeches and for notes missing audio. Media plays through
+  `/api/anki/media/{filename}`, read from `ANKI_MEDIA_DIR` rather than synced: the files
+  are already on this machine in the sync server's own store.
+- **Derivation** (`anki_derive.py`) — turns the surplus already on a note into further
+  notes: the recording alone answered by writing the word, and one note per kanji
+  carrying KANJIDIC2 readings and a KRADFILE component breakdown. Derived notes reuse the
+  source's own `[sound:...]` reference, so no media file is created. Everything lands in
+  `Japanese::Wakatta::*` under its own notetypes, making the whole output reversible by
+  deleting two decks. Idempotent: audio cards dedupe on source note, kanji cards on the
+  character.
+- **Review** (`anki_review.py`, `/drill`) — cards come through the real v3 scheduler, so
+  deck limits, learning steps and ordering behave exactly as in Anki, and answers land in
+  the collection's history like any other. The interaction is chosen by notetype;
+  anything unregistered falls back to show-answer-and-pick-a-button. Three modes: review
+  (answers real cards), practice (same canvas, no scheduling), and session.
+- **Sessions** — Anki's core refuses to answer a card that is not the scheduler's top
+  card, so card selection is done with filtered decks built from any Anki search, order
+  and limit. They ignore the home deck's daily limits, so the builder warns when a
+  session outruns them and reports how many matches fall outside `Japanese::`.
+- **Grading is pass/fail** — Again and Good only, on both the validated and the
+  hand-answered path. Under SM-2, Hard costs 15 pp of ease and Easy adds 15 pp against a
+  130% floor, and a third of this collection already sits on that floor. See
+  `COLLECTION.md`. Writing quality is still measured and reported, it just cannot move
+  scheduling.
+
+### Stroke Validation (`stroke_validation.py`)
+
+`kanjivg_db.recognize()` answers "which character is this?" and gives no feedback — a
+character drawn in the wrong order simply scores badly against itself. Validation asks
+the opposite question: given a known target, what went wrong? It separates wrong stroke
+count, wrong order, a stroke drawn end-to-start, and a stroke drawn badly, reusing the
+same normalized-DTW machinery.
+
+Order and direction come from *relative* comparisons — does this stroke match a
+different reference stroke better, does reversing it help — so they need no tuned
+constants. Two guards keep order detection conservative, since an order error fails the
+card: a cross-assignment must beat staying in place by a margin, and a stroke that
+already matches its own position acceptably is never called out of order. Shape is the
+one absolute judgement, and its thresholds are calibrated against synthetic jitter of
+KanjiVG's own strokes rather than real pen input — the first thing to retune once there
+is drilling data.
+
+The write drill (`/drill`) uses it in a trace-then-hide loop: study the animated model
+with a live canvas over it, then the model is hidden and the same character written from
+memory and graded. Copying a visible character is restudy; producing it from memory is
+retrieval, and the combination beats either alone.
+
 ### Handwriting Recognition Webapp (`server.py` + `static/index.html`)
 - FastAPI server loads KanjiVG stroke database on startup, generates `static/db.json`
 - HTML5 Canvas captures stylus/pointer strokes
@@ -212,6 +277,16 @@ Then open http://localhost:8000 (or http://192.168.86.207:8000 from another devi
 - `/page-reader` → library: upload a PDF, browse previous uploads
 - `/read/{work_id}` → reader for a single work, opened from the library
 
+### Anki bridge setup
+
+```bash
+cp .env.example .env        # sync server URL, credentials, and where its media lives
+```
+
+The bridge downloads the collection on its first sync (`POST /api/anki/sync`), which
+also builds the word index. It never performs a full *upload* — that direction
+overwrites the server, and nothing here should be able to do it as a side effect.
+
 ### Subsequent starts
 
 ```bash
@@ -262,6 +337,15 @@ SegmentationOverride              ← implemented (user-defined tokenizer correc
 - Surfaces the minimum word set to unlock a unit: "You need 8 more words to read this page"
 
 ### SRS (Spaced Repetition)
+
+**Superseded in part — see the Anki Bridge above.** Anki now schedules, and wakatta
+supplies the interactions it cannot: objectively graded handwriting, and card selection
+by arbitrary search. What remains open from the original design is §E of
+`STUDY_TOOLS.md` — scheduling the *word* rather than the card, and consuming evidence
+(including the passive `WordLookup` signal) rather than reviews. That is a genuine
+divergence from Anki's per-card model, not a thing Anki can be made to do, so it stays
+an open question rather than a plan.
+
 - All extracted words enter the study deck automatically
 - FSRS algorithm schedules reviews
 - Each card: spelling, reading, pitch accent, example sentence from source material
