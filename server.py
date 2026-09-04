@@ -39,6 +39,7 @@ import dictionary
 import kanji
 import kanjivg_db
 import reading_order
+import stroke_calibration
 import stroke_validation
 
 load_dotenv()
@@ -667,6 +668,7 @@ async def lifespan(app: FastAPI):
         print("[dictionary] Dictionary lookups will return 503 until the setup scripts are run.")
 
     anki_bridge.build_schema(engine)
+    stroke_calibration.build_schema(engine)
 
     try:
         await asyncio.to_thread(kanji.build_db, engine)
@@ -789,6 +791,19 @@ class SessionRequest(BaseModel):
 class ValidateStrokesRequest(BaseModel):
     char: str
     strokes: list[Stroke]
+    capture: bool = True          # keep the attempt so thresholds can be tuned on it
+
+
+class StrokeSettings(BaseModel):
+    ok: float | None = None
+    poor: float | None = None
+    reversal_ratio: float | None = None
+    order_ratio: float | None = None
+
+
+class StrokeLabel(BaseModel):
+    sample_id: int
+    user_label: str               # "correct" | "incorrect"
 
 
 class DeriveRequest(BaseModel):
@@ -1458,7 +1473,57 @@ def validate_strokes(req: ValidateStrokesRequest):
         raise HTTPException(503, "KanjiVG database not loaded")
     if len(req.char) != 1:
         raise HTTPException(400, "Validate one character at a time")
-    return stroke_validation.validate(req.char, [s.points for s in req.strokes], kvg_db)
+    cfg = stroke_calibration.settings(engine)
+    raw = [s.points for s in req.strokes]
+    result = stroke_validation.validate(req.char, raw, kvg_db, settings=cfg)
+    if req.capture and "error" not in result:
+        # Every attempt is kept. The thresholds can only be chosen from real
+        # handwriting, and the disagreements are the rows that matter.
+        result["sample_id"] = stroke_calibration.record(engine, req.char, raw, result, cfg)
+    return result
+
+
+@app.get("/api/strokes/settings")
+def stroke_settings_get():
+    return {"settings": stroke_calibration.settings(engine),
+            "defaults": stroke_calibration.DEFAULTS}
+
+
+@app.post("/api/strokes/settings")
+def stroke_settings_set(req: StrokeSettings):
+    values = {k: v for k, v in req.model_dump().items() if v is not None}
+    if not values:
+        raise HTTPException(400, "Nothing to set")
+    return {"settings": stroke_calibration.set_settings(engine, values)}
+
+
+@app.post("/api/strokes/label")
+def stroke_label(req: StrokeLabel):
+    """Record that the writer disagrees (or agrees) with a verdict."""
+    out = stroke_calibration.label(engine, req.sample_id, req.user_label)
+    if out.get("error"):
+        raise HTTPException(400, out["error"])
+    return out
+
+
+@app.get("/api/strokes/samples")
+def stroke_samples(only_labelled: bool = False, limit: int = 200):
+    return stroke_calibration.samples(engine, only_labelled=only_labelled,
+                                      limit=min(limit, 500))
+
+
+@app.post("/api/strokes/replay")
+def stroke_replay(req: StrokeSettings):
+    """How a candidate set of thresholds would judge every labelled attempt."""
+    if kvg_db is None:
+        raise HTTPException(503, "KanjiVG database not loaded")
+    candidate = {k: v for k, v in req.model_dump().items() if v is not None}
+    return stroke_calibration.replay(engine, candidate, kvg_db)
+
+
+@app.get("/calibrate")
+def calibrate_page():
+    return FileResponse("static/calibrate.html")
 
 
 @app.get("/api/anki/session")
@@ -1506,8 +1571,6 @@ async def anki_session_end(name: str = anki_review.DEFAULT_SESSION_DECK,
         except RuntimeError as e:
             result["sync"] = {"status": "failed", "detail": str(e)}
     return result
-
-
 @app.get("/api/anki/review/decks")
 def anki_review_decks():
     """Decks with what the scheduler would serve, for the review deck picker."""

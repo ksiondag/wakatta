@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wakatta — Calibrate</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: #1a1a2e; color: #e0e0e0;
+  font-family: sans-serif; font-size: 14px; }
+.layout { display: flex; flex-direction: column; height: 100vh; }
+.navbar { flex-shrink: 0; display: flex; align-items: center; gap: 16px;
+  padding: 8px 16px; background: #12122a; border-bottom: 1px solid #333; }
+.navbar a { color: #888; text-decoration: none; font-size: 0.9rem; }
+.navbar a:hover { color: #bbb; }
+.navbar .current { color: #aaa; font-size: 0.9rem; font-weight: 600; }
+.navbar-sep { color: #444; }
+.main { flex: 1; overflow-y: auto; padding: 22px 20px 60px; }
+.wrap { max-width: 940px; margin: 0 auto; }
+
+button { padding: 7px 16px; border: 1px solid #555; border-radius: 5px;
+  background: #2a2a3e; color: #ddd; cursor: pointer; font-size: 0.9rem; }
+button:hover { background: #3a3a5e; }
+button.primary { border-color: #7070cc; background: #2e2e56; }
+button:disabled { opacity: .4; cursor: default; }
+
+.card { background: #1e1e34; border: 1px solid #333; border-radius: 8px;
+  padding: 16px 18px; margin-bottom: 16px; }
+.card h2 { font-size: .95rem; color: #9a9ac0; margin-bottom: 4px; }
+.card .lede { color: #7a7a9a; font-size: .85rem; margin-bottom: 14px; line-height: 1.5; }
+
+.knob { display: grid; grid-template-columns: 130px 1fr 74px; gap: 12px;
+  align-items: center; margin-bottom: 10px; }
+.knob label { color: #bbb; font-size: .88rem; }
+.knob .hint { grid-column: 1 / -1; color: #6a6a88; font-size: .78rem; margin: -4px 0 8px; }
+.knob input[type=range] { width: 100%; }
+.knob output { color: #d8d8ea; font-variant-numeric: tabular-nums; text-align: right; }
+
+.stats { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 12px; }
+.stat { background: #16162c; border: 1px solid #333; border-radius: 6px;
+  padding: 9px 14px; min-width: 118px; }
+.stat .n { font-size: 1.35rem; }
+.stat .k { color: #7a7a9a; font-size: .76rem; }
+.stat.bad .n { color: #d69090; }
+.stat.warn .n { color: #d9a441; }
+.stat.good .n { color: #7fbf7f; }
+
+table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+th { text-align: left; color: #6a6a88; font-weight: 600; padding: 6px 8px;
+  border-bottom: 1px solid #333; font-size: .76rem; text-transform: uppercase; }
+td { padding: 6px 8px; border-bottom: 1px solid #262640; vertical-align: top; }
+td.ch { font-size: 1.5rem; line-height: 1; }
+.tag { padding: 1px 7px; border-radius: 3px; font-size: .74rem;
+  border: 1px solid #3a3a55; color: #9a9ac0; }
+.tag.pass { border-color: #4a8a4a; color: #8fbf8f; }
+.tag.fail { border-color: #a05555; color: #d69090; }
+.tag.said-ok { border-color: #b08840; color: #d9a441; }
+.dev { font-variant-numeric: tabular-nums; color: #9a9ac0; }
+.msg { color: #777; padding: 26px 0; text-align: center; }
+.err { color: #d88; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="navbar">
+    <a href="/">Handwriting</a><span class="navbar-sep">·</span>
+    <a href="/page-reader">Library</a><span class="navbar-sep">·</span>
+    <a href="/anki">Anki</a><span class="navbar-sep">·</span>
+    <a href="/drill">Drill</a><span class="navbar-sep">·</span>
+    <span class="current">Calibrate</span>
+  </div>
+  <div class="main"><div class="wrap">
+
+    <div class="card">
+      <h2>Thresholds</h2>
+      <div class="lede">
+        Deviation is the average distance between the stroke you drew and the
+        reference, as a fraction of the character's box — 0.10 means a tenth of the
+        character's width away, on average. The original values came from perturbing
+        KanjiVG's own strokes with noise, which described a plotter rather than a
+        hand: the old shape limit was 0.094, so ordinary handwriting failed.
+        <br><br>
+        Order and direction are decided by comparison, not by an absolute limit — but
+        the order guard only applies to strokes already under the shape limit, so a
+        shape limit that is too tight lets false "out of order" through as well.
+      </div>
+
+      <div class="knob">
+        <label for="ok">shape: correct</label>
+        <input type="range" id="ok" min="0.02" max="0.60" step="0.01">
+        <output id="okv"></output>
+        <div class="hint">A stroke closer than this is simply right.</div>
+      </div>
+      <div class="knob">
+        <label for="poor">shape: wrong</label>
+        <input type="range" id="poor" min="0.05" max="1.00" step="0.01">
+        <output id="poorv"></output>
+        <div class="hint">Beyond this it is a different stroke, not a wobbly one. Between the two reads as "off-shape".</div>
+      </div>
+      <div class="knob">
+        <label for="order_ratio">order confidence</label>
+        <input type="range" id="order_ratio" min="0.1" max="0.95" step="0.05">
+        <output id="order_ratiov"></output>
+        <div class="hint">Lower is more forgiving: another stroke must match this much better before "out of order" is believed. Order errors fail the card.</div>
+      </div>
+      <div class="knob">
+        <label for="reversal_ratio">direction confidence</label>
+        <input type="range" id="reversal_ratio" min="0.1" max="0.95" step="0.05">
+        <output id="reversal_ratiov"></output>
+        <div class="hint">Lower is more forgiving: reversing the stroke must improve it this much before "drawn backwards" is believed.</div>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
+        <button id="test">Test against labelled attempts</button>
+        <button id="save" class="primary">Save these thresholds</button>
+        <button id="reset">Reset to defaults</button>
+        <span id="saveNote" style="color:#8a8;font-size:.85rem;align-self:center"></span>
+      </div>
+      <div id="replay"></div>
+    </div>
+
+    <div class="card">
+      <h2>Attempts</h2>
+      <div class="lede">
+        Every check is kept. The useful rows are the disagreements — where you told
+        the drill it was wrong about you. Mark any row here too.
+      </div>
+      <div id="samples"><div class="msg">Loading…</div></div>
+    </div>
+
+  </div></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const KNOBS = ['ok', 'poor', 'order_ratio', 'reversal_ratio'];
+let defaults = {};
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+}
+
+function readKnobs() {
+  return Object.fromEntries(KNOBS.map(k => [k, parseFloat($(k).value)]));
+}
+function showKnobs(values) {
+  for (const k of KNOBS) { $(k).value = values[k]; $(k + 'v').textContent = (+values[k]).toFixed(2); }
+}
+for (const k of KNOBS) {
+  document.addEventListener('input', e => {
+    if (e.target.id === k) $(k + 'v').textContent = parseFloat(e.target.value).toFixed(2);
+  });
+}
+
+async function loadSettings() {
+  const s = await api('/api/strokes/settings');
+  defaults = s.defaults;
+  showKnobs(s.settings);
+}
+
+async function loadSamples() {
+  let rows;
+  try { rows = await api('/api/strokes/samples?limit=200'); }
+  catch (e) { $('samples').innerHTML = `<div class="err">${e.message}</div>`; return; }
+  if (!rows.length) {
+    $('samples').innerHTML = '<div class="msg">No attempts recorded yet — draw something in the drill.</div>';
+    return;
+  }
+  $('samples').innerHTML = `<table><thead><tr>
+      <th></th><th>verdict</th><th>you said</th><th>worst dev</th>
+      <th>strokes</th><th>issues</th><th></th></tr></thead><tbody>
+    ${rows.map(r => `<tr>
+      <td class="ch">${r.char}</td>
+      <td><span class="tag ${r.auto_ok ? 'pass' : 'fail'}">${r.auto_ok ? 'passed' : 'failed'}</span></td>
+      <td>${r.user_label ? `<span class="tag ${r.user_label === 'correct' ? 'said-ok' : ''}">${r.user_label}</span>` : '—'}</td>
+      <td class="dev">${r.worst_deviation ?? '—'}</td>
+      <td class="dev">${r.strokes_drawn}/${r.strokes_expected}</td>
+      <td>${(r.issues || []).slice(0, 2).join('; ') || '—'}</td>
+      <td>
+        <button data-id="${r.id}" data-l="correct">was right</button>
+        <button data-id="${r.id}" data-l="incorrect">was wrong</button>
+      </td></tr>`).join('')}</tbody></table>`;
+  $('samples').querySelectorAll('button[data-id]').forEach(b => {
+    b.onclick = async () => {
+      await api('/api/strokes/label', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sample_id: +b.dataset.id, user_label: b.dataset.l }),
+      });
+      loadSamples();
+    };
+  });
+}
+
+$('test').onclick = async () => {
+  $('replay').innerHTML = '<div class="msg">Re-judging…</div>';
+  let r;
+  try {
+    r = await api('/api/strokes/replay', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(readKnobs()),
+    });
+  } catch (e) { $('replay').innerHTML = `<div class="err">${e.message}</div>`; return; }
+  if (!r.labelled) {
+    $('replay').innerHTML = '<div class="msg">Nothing labelled yet. Mark a few attempts below, ' +
+      'or press "I actually drew that correctly" in the drill when it gets one wrong.</div>';
+    return;
+  }
+  $('replay').innerHTML = `<div class="stats">
+      <div class="stat good"><div class="n">${r.agree}</div><div class="k">agree with you</div></div>
+      <div class="stat bad"><div class="n">${r.false_alarms}</div><div class="k">false alarms</div></div>
+      <div class="stat warn"><div class="n">${r.missed_errors}</div><div class="k">missed errors</div></div>
+      <div class="stat"><div class="n">${r.labelled}</div><div class="k">labelled attempts</div></div>
+    </div>` +
+    (r.disagreements.length
+      ? `<table style="margin-top:14px"><thead><tr><th></th><th>would be</th><th>why</th></tr></thead><tbody>
+          ${r.disagreements.map(d => `<tr><td class="ch">${d.char}</td>
+            <td><span class="tag ${d.kind === 'false alarm' ? 'fail' : 'said-ok'}">${d.kind}</span></td>
+            <td>${(d.issues || []).join('; ') || '—'}</td></tr>`).join('')}
+         </tbody></table>` : '');
+};
+
+$('save').onclick = async () => {
+  const s = await api('/api/strokes/settings', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(readKnobs()),
+  });
+  showKnobs(s.settings);
+  $('saveNote').textContent = 'Saved — the drill uses these from the next check.';
+  setTimeout(() => ($('saveNote').textContent = ''), 4000);
+};
+
+$('reset').onclick = () => { showKnobs(defaults); $('saveNote').textContent = 'Not saved yet.'; };
+
+loadSettings().then(loadSamples);
+</script>
+</body>
+</html>

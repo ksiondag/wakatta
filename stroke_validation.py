@@ -17,36 +17,26 @@ failure modes:
 Order and direction are decided by *relative* comparisons (does this stroke match a
 different reference stroke better? does reversing it help?), so they need no tuned
 constants and are the trustworthy half of the output. Shape needs an absolute
-threshold, and the ones below are calibrated against synthetic jitter rather than
-real handwriting — see THRESHOLDS.
+threshold, which lives in `stroke_calibration` rather than here.
+
+Distances are reported as *deviation*: DTW distance divided by the number of sample
+points, so the number means "average distance from the reference, as a fraction of
+the character's box". The raw DTW sum scales with sample count and misleads badly —
+the original limit of 1.5 sounded strict but was a 9% mean deviation, which is
+ordinary handwriting, so it failed most correct strokes. Worse, the order guard only
+applies to strokes already under the shape limit, so too tight a limit silently
+disables it and lets false "out of order" through as well.
 """
 
 import numpy as np
 
 import kanjivg_db
 
-# Per-stroke DTW distance bands, measured by perturbing KanjiVG's own strokes with
-# gaussian noise: sigma 0.03 (slightly untidy) lands near 0.6, sigma 0.06 (visibly
-# sloppy but readable) near 1.2, sigma 0.12 (barely the right shape) near 2.3. A
-# stroke compared against a *different* stroke of the same character scores ~12.
-#
-# These are provisional. They come from synthetic noise, not from real pen input,
-# and are the first thing to retune once there's actual drilling data to look at.
-THRESH_OK = 1.5
-THRESH_POOR = 4.0
-
-# Reversing a stroke and getting a materially better match is strong evidence it was
-# drawn backwards; the margin keeps near-symmetric strokes (dots, short ticks, where
-# forward and reverse score almost the same) from being flagged on noise.
-REVERSAL_RATIO = 0.6
-
-# Same idea for order. Greedy assignment will happily pair stroke 5 with reference
-# stroke 7 when the writing is messy enough that everything matches everything
-# poorly, which would report a confident "drawn out of sequence" for what is really
-# just untidy handwriting. So a cross-assignment is only believed when it beats
-# staying in place by this margin; otherwise the stroke keeps its own index and the
-# shape thresholds judge it. Order errors force a fail, so a false one is expensive.
-ORDER_RATIO = 0.6
+# Thresholds are NOT defined here. They live in `stroke_calibration` — stored in the
+# database, editable at runtime from /calibrate, and chosen by replaying real labelled
+# attempts. Hard-coding them here is what produced the original mistake: values fitted
+# to gaussian noise on KanjiVG's own strokes, which describe a plotter rather than a
+# hand. See stroke_calibration.DEFAULTS for the current starting points.
 
 
 def _prepare(raw_strokes: list[list[dict]]) -> list[np.ndarray]:
@@ -81,8 +71,24 @@ def _assign(cost: np.ndarray) -> list[int]:
     return assignment
 
 
-def validate(char: str, raw_strokes: list[list[dict]], db) -> dict:
-    """Grade a drawn character against its KanjiVG reference."""
+def validate(char: str, raw_strokes: list[list[dict]], db,
+             settings: dict | None = None) -> dict:
+    """Grade a drawn character against its KanjiVG reference.
+
+    Distances are reported as *deviation* — DTW distance divided by the number of
+    sample points — so a threshold reads as "average distance from the reference, as
+    a fraction of the character's box". The raw DTW sum scales with sample count and
+    is meaningless to tune by hand: 1.5 sounds strict but is a 9% mean deviation,
+    which is ordinary handwriting, and it was failing most correct strokes.
+
+    `settings` supplies ok / poor / reversal_ratio / order_ratio; see
+    stroke_calibration, which stores them and keeps the samples to choose them from.
+    """
+    import stroke_calibration
+    cfg = {**stroke_calibration.DEFAULTS, **(settings or {})}
+    ok_t, poor_t = cfg["ok"], cfg["poor"]
+    reversal_ratio, order_ratio = cfg["reversal_ratio"], cfg["order_ratio"]
+    n_samples = kanjivg_db.SAMPLES_PER_STROKE
     ref = db.chars.get(char)
     if ref is None:
         return {"char": char, "error": "no stroke data for this character"}
@@ -91,19 +97,19 @@ def validate(char: str, raw_strokes: list[list[dict]], db) -> dict:
     if not user:
         return {"char": char, "error": "no usable strokes"}
 
-    cost = np.array([[kanjivg_db._dtw(u, r) for r in ref] for u in user])
-    cost_rev = np.array([[kanjivg_db._dtw(u[::-1], r) for r in ref] for u in user])
+    cost = np.array([[kanjivg_db._dtw(u, r) for r in ref] for u in user]) / n_samples
+    cost_rev = np.array([[kanjivg_db._dtw(u[::-1], r) for r in ref] for u in user]) / n_samples
     assignment = _assign(cost)
 
     # Demote unconvincing cross-assignments back to the identity pairing (see
-    # ORDER_RATIO): messy writing shouldn't be reported as a stroke-order mistake.
+    # order_ratio): messy writing shouldn't be reported as a stroke-order mistake.
     for i, j in enumerate(assignment):
         if j < 0 or j == i or i >= len(ref):
             continue
         # A stroke that already matches its own position acceptably is not out of
         # order, whatever else it happens to resemble — characters like 腰 repeat
         # similar short strokes, and noise alone can make one match a sibling better.
-        if cost[i][i] <= THRESH_OK or cost[i][j] >= cost[i][i] * ORDER_RATIO:
+        if cost[i][i] <= ok_t or cost[i][j] >= cost[i][i] * order_ratio:
             assignment[i] = i
 
     strokes_out, issues = [], []
@@ -114,7 +120,7 @@ def validate(char: str, raw_strokes: list[list[dict]], db) -> dict:
             issues.append(f"stroke {i + 1} doesn't correspond to any stroke of {char}")
             continue
         d, d_rev = float(cost[i][j]), float(cost_rev[i][j])
-        backwards = d_rev < d * REVERSAL_RATIO
+        backwards = d_rev < d * reversal_ratio
         best = min(d, d_rev)
 
         if j != i:
@@ -123,9 +129,9 @@ def validate(char: str, raw_strokes: list[list[dict]], db) -> dict:
         elif backwards:
             verdict = "direction"
             issues.append(f"stroke {i + 1} was drawn backwards")
-        elif best <= THRESH_OK:
+        elif best <= ok_t:
             verdict = "ok"
-        elif best <= THRESH_POOR:
+        elif best <= poor_t:
             verdict = "shape"
             issues.append(f"stroke {i + 1} is the right stroke but off-shape")
         else:
@@ -134,7 +140,8 @@ def validate(char: str, raw_strokes: list[list[dict]], db) -> dict:
 
         strokes_out.append({
             "drawn": i, "expected": j, "verdict": verdict,
-            "distance": round(d, 3), "reversed_distance": round(d_rev, 3),
+            "deviation": round(d, 3), "reversed_deviation": round(d_rev, 3),
+            "distance": round(d, 3),  # kept: callers reading "distance" still work
             "backwards": backwards,
         })
 
@@ -154,4 +161,5 @@ def validate(char: str, raw_strokes: list[list[dict]], db) -> dict:
         "strokes": strokes_out,
         "missing_strokes": missing,
         "issues": issues,
+        "settings": cfg,
     }

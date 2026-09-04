@@ -123,6 +123,10 @@ button.primary { border-color: #7070cc; background: #2e2e56; }
 .slot .verdict { font-size: 0.8rem; min-height: 1.1em; }
 .slot .verdict.ok { color: #7fbf7f; }
 .slot .verdict.bad { color: #d69090; }
+.slot .dev { color: #6a6a88; font-size: 0.72rem; }
+.disagree { margin-top: 10px; text-align: center; }
+.disagree button { border-color: #b08840; color: #d9a441; }
+.disagree .note { color: #7a7a9a; font-size: 0.8rem; margin-top: 6px; }
 
 .controls { display: flex; gap: 12px; justify-content: center; margin-top: 22px; flex-wrap: wrap; }
 
@@ -231,6 +235,8 @@ button.primary { border-color: #7070cc; background: #2e2e56; }
     <a href="/anki">Anki</a>
     <span class="navbar-sep">·</span>
     <span class="current">Drill</span>
+    <span class="navbar-sep">·</span>
+    <a href="/calibrate">Calibrate</a>
     <select id="mode">
       <option value="review">Review (answers the card)</option>
       <option value="practice">Practice (no scheduling)</option>
@@ -438,14 +444,59 @@ async function check() {
     pads[i].canvas.classList.toggle('ok', !!good);
     pads[i].canvas.classList.toggle('bad', !good);
     v.className = 'verdict ' + (good ? 'ok' : 'bad');
-    v.textContent = r.error ? r.error : (good ? '✓ correct' : `${r.issues.length} issue(s)`);
+    const worst = Math.max(...(r.strokes || []).map(s => s.deviation ?? 0), 0);
+    v.innerHTML = (r.error ? r.error : (good ? '✓ correct' : `${r.issues.length} issue(s)`)) +
+      (r.error ? '' : `<div class="dev">worst deviation ${worst.toFixed(2)}</div>`);
   });
   btn.disabled = false; btn.textContent = 'Check';
   await reveal(results);
+  lastResults = results;
   if (mode === 'review' && reviewCard) {
     await submit({ card_id: reviewCard.card_id, validations: results,
                    milliseconds: Date.now() - shownAt });
   }
+  offerDisagreement(results);
+}
+
+let lastResults = null;
+
+// The validator's thresholds can only be chosen from real handwriting. Saying "that
+// was actually right" both records the sample that proves it and, mid-review, undoes
+// the failure it caused — a false alarm shouldn't cost a repetition while the numbers
+// are still being tuned.
+function offerDisagreement(results) {
+  const ids = (results || []).filter(r => r && r.sample_id).map(r => r.sample_id);
+  if (!ids.length) return;
+  const failed = results.some(r => r && !r.correct);
+  const box = document.createElement('div');
+  box.className = 'disagree';
+  box.innerHTML =
+    `<button id="dsAgree">${failed ? 'I actually drew that correctly' : 'That was wrong, actually'}</button>` +
+    `<div class="note" id="dsNote"></div>`;
+  $('result').appendChild(box);
+  $('dsAgree').onclick = async () => {
+    const label = failed ? 'correct' : 'incorrect';
+    for (const id of ids) {
+      await api('/api/strokes/label', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sample_id: id, user_label: label }),
+      }).catch(() => {});
+    }
+    $('dsAgree').disabled = true;
+    $('dsNote').textContent = failed
+      ? 'Recorded. Re-answering the card as correct…' : 'Recorded as a missed error.';
+    if (failed && mode === 'review' && reviewCard) {
+      // Answer it Good so the false alarm doesn't cost a repetition.
+      const r = await api('/api/anki/review/answer', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ card_id: reviewCard.card_id, rating: 'good' }),
+      }).catch(e => ({ error: e.message }));
+      $('dsNote').textContent = r && r.error
+        ? `Recorded, but the card had already moved on (${r.error}).`
+        : 'Recorded, and the card was re-answered as correct.';
+    }
+    $('dsNote').textContent += '  Tune the thresholds at /calibrate.';
+  };
 }
 
 async function reveal(results) {
@@ -684,7 +735,8 @@ async function renderSession() {
       </div>
       <div class="row"><span class="status warn" id="sWarn"></span></div>
     </div>
-    <div class="session"><h3>Existing sessions</h3>${existing}</div>`;
+    <div class="session"><h3>Existing sessions</h3>${existing}</div>
+`;
 
   document.querySelectorAll('.presets button').forEach(b => {
     b.onclick = () => { $('sSearch').value = PRESETS[b.dataset.p]; countMatches(); };

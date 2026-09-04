@@ -39,7 +39,10 @@ RATINGS = {
 # Boundaries used only to describe how tidy the writing was. They do not affect the
 # rating — see grade() — but are reported so the quality signal is visible and can be
 # analysed later, once there's real drilling data to calibrate against.
-CLEAN_DISTANCE = 0.75
+# Deviation units now (see stroke_validation): mean distance from the reference as a
+# fraction of the character's box. 0.75 was a raw DTW sum and would call anything
+# clean under the new scale.
+CLEAN_DISTANCE = 0.10
 
 
 def grade(results: list[dict | None]) -> dict:
@@ -85,8 +88,9 @@ def grade(results: list[dict | None]) -> dict:
         if any(s["verdict"] in ("wrong", "extra") for s in r["strokes"]):
             return fail(f"{r['char']}: a stroke doesn't match the character")
 
-    distances = [s["distance"] for r in results for s in r["strokes"]
-                 if s["distance"] is not None]
+    distances = [s.get("deviation", s.get("distance")) for r in results
+                 for s in r["strokes"]
+                 if s.get("deviation", s.get("distance")) is not None]
     worst = max(distances) if distances else 0.0
     off_shape = sum(1 for r in results for s in r["strokes"] if s["verdict"] == "shape")
     quality = ("clean" if worst <= CLEAN_DISTANCE
