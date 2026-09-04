@@ -180,37 +180,53 @@ def next_card(deck: str | None = None) -> dict:
 
 
 def answer(card_id: int, rating: str, milliseconds: int = 0) -> dict:
-    """Answer a card as the scheduler's current top card.
+    """Answer a specific card.
 
-    States are re-fetched rather than round-tripped through the client: they're a
-    protobuf the browser has no business holding, and re-fetching also catches the
-    case where the queue moved on between question and answer, which would otherwise
-    silently apply a rating to the wrong card.
+    Deliberately does *not* re-fetch the queue first. An earlier version did, and
+    required the card being answered to still be the scheduler's top card — which
+    breaks the moment anything else becomes due while you are looking at a card. Sit
+    on a word for ten minutes, an intraday learning card comes due, and the answer is
+    refused. Scheduling states are fetched per card instead, which the backend accepts
+    for a card it has served even once the queue has moved past it.
+
+    Time is capped at the deck's `maxTaken` (60s by default), which is what Anki
+    itself records. Writing the raw elapsed time would put a five-minute pause into
+    the review log as five minutes and quietly wreck the time statistics.
     """
     if rating not in RATINGS:
         return {"error": f"unknown rating: {rating}"}
     with anki_bridge.open_collection() as col:
-        card = col.get_card(card_id)
+        try:
+            card = col.get_card(card_id)
+        except Exception:
+            return {"error": f"no such card: {card_id}"}
         col.decks.select(card.did)
-        queued = col.sched.get_queued_cards(fetch_limit=1)
-        if not queued.cards or queued.cards[0].card.id != card_id:
-            return {"error": "the queue moved on — refetch the next card"}
-        states = queued.cards[0].states
+        try:
+            states = col._backend.get_scheduling_states(card_id)
+        except Exception as e:
+            return {"error": f"could not read scheduling state: {e}"}
         labels = list(col.sched.describe_next_states(states))
-        # build_answer reads the card's own review timer to fill in how long the
-        # answer took; nothing started it here, so start it and overwrite below with
-        # the time the client actually measured.
+
+        conf = col.decks.config_dict_for_deck_id(card.odid or card.did)
+        cap_ms = int(conf.get("maxTaken", 60)) * 1000
+        taken = min(int(milliseconds), cap_ms) if milliseconds else 0
+
         card.start_timer()
         card_answer = col.sched.build_answer(
             card=card, states=states, rating=RATINGS[rating])
-        if milliseconds:
-            card_answer.milliseconds_taken = int(milliseconds)
-        col.sched.answer_card(card_answer)
+        if taken:
+            card_answer.milliseconds_taken = taken
+        try:
+            col.sched.answer_card(card_answer)
+        except Exception as e:
+            return {"error": str(e)}
         order = ["again", "hard", "good", "easy"]
         return {
             "card_id": card_id,
             "rating": rating,
             "interval": labels[order.index(rating)] if len(labels) == 4 else None,
+            "milliseconds": taken,
+            "capped": bool(milliseconds and milliseconds > cap_ms),
         }
 
 
