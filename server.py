@@ -34,6 +34,7 @@ from dotenv import load_dotenv
 import anki_bridge
 import anki_derive
 import anki_review
+import anki_triage
 import ctd
 import dictionary
 import kanji
@@ -1571,6 +1572,32 @@ async def anki_session_end(name: str = anki_review.DEFAULT_SESSION_DECK,
         except RuntimeError as e:
             result["sync"] = {"status": "failed", "detail": str(e)}
     return result
+
+
+@app.get("/api/anki/triage")
+async def anki_triage_preview(window_days: int = anki_triage.WINDOW_DAYS):
+    """Which recent failures were jogs and which weren't. Read-only."""
+    def run():
+        with anki_bridge.open_collection() as col:
+            return anki_triage.preview(col, window_days=window_days)
+    return await asyncio.to_thread(run)
+
+
+@app.post("/api/anki/triage")
+async def anki_triage_apply(window_days: int = anki_triage.WINDOW_DAYS, push: bool = True):
+    """Move repeatedly-failed cards out of rotation, bring graduates back."""
+    def run():
+        with anki_bridge.open_collection() as col:
+            return anki_triage.apply(col, window_days=window_days)
+    result = await asyncio.to_thread(run)
+    if push and (result["moved_to_hard"] or result["returned_home"]):
+        try:
+            result["sync"] = await asyncio.to_thread(anki_bridge.sync)
+        except RuntimeError as e:
+            result["sync"] = {"status": "failed", "detail": str(e)}
+    return result
+
+
 @app.get("/api/anki/review/decks")
 def anki_review_decks():
     """Decks with what the scheduler would serve, for the review deck picker."""

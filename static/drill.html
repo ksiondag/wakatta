@@ -736,7 +736,20 @@ async function renderSession() {
       <div class="row"><span class="status warn" id="sWarn"></span></div>
     </div>
     <div class="session"><h3>Existing sessions</h3>${existing}</div>
-`;
+    <div class="session">
+      <h3>Triage failures</h3>
+      <div class="status" style="margin-bottom:10px">
+        A failure that recovers on the next step was a jog; one that repeats was not
+        known. Repeats move to <code>Japanese::Hard</code>, out of the daily rotation,
+        and come back on their own after ${'' + 2} clean passes.
+      </div>
+      <div class="row">
+        <button id="tPreview">See what would move</button>
+        <button id="tApply" class="primary" disabled>Move them</button>
+        <span class="status" id="tStatus"></span>
+      </div>
+      <div id="tOut"></div>
+    </div>`;
 
   document.querySelectorAll('.presets button').forEach(b => {
     b.onclick = () => { $('sSearch').value = PRESETS[b.dataset.p]; countMatches(); };
@@ -744,6 +757,34 @@ async function renderSession() {
   $('sSearch').oninput = () => { clearTimeout(window._t); window._t = setTimeout(countMatches, 400); };
   $('sBuild').onclick = buildSession;
   $('sEnd').onclick = endSession;
+  $('tPreview').onclick = triagePreview;
+  $('tApply').onclick = triageApply;
+}
+
+async function triagePreview() {
+  $('tStatus').textContent = 'checking…';
+  try {
+    const r = await api('/api/anki/triage');
+    const c = r.counts;
+    $('tStatus').textContent =
+      `${c.clean} clean · ${c.jog} jogs · ${c.hard} repeats · ${c.graduate} ready to come home`;
+    $('tOut').innerHTML = (r.hard.length ? `<div class="status" style="margin-top:8px">
+        would move: ${r.hard.map(d => `${d.word} <span style="color:#6a6a88">(${d.lapses}L)</span>`).join('　')}
+      </div>` : '') +
+      (r.graduate.length ? `<div class="status" style="margin-top:6px">
+        would come home: ${r.graduate.map(d => d.word).join('　')}</div>` : '');
+    $('tApply').disabled = !(c.hard || c.graduate);
+  } catch (e) { $('tStatus').textContent = e.message; }
+}
+
+async function triageApply() {
+  $('tApply').disabled = true; $('tStatus').textContent = 'moving…';
+  try {
+    const r = await api('/api/anki/triage', { method: 'POST' });
+    $('tStatus').textContent =
+      `moved ${r.moved_to_hard} to Japanese::Hard, brought ${r.returned_home} home`;
+    $('tOut').innerHTML = '';
+  } catch (e) { $('tStatus').textContent = e.message; }
 }
 
 async function countMatches() {
