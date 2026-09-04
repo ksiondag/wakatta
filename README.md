@@ -199,10 +199,37 @@ Order and direction come from *relative* comparisons — does this stroke match 
 different reference stroke better, does reversing it help — so they need no tuned
 constants. Two guards keep order detection conservative, since an order error fails the
 card: a cross-assignment must beat staying in place by a margin, and a stroke that
-already matches its own position acceptably is never called out of order. Shape is the
-one absolute judgement, and its thresholds are calibrated against synthetic jitter of
-KanjiVG's own strokes rather than real pen input — the first thing to retune once there
-is drilling data.
+already matches its own position acceptably is never called out of order.
+
+Shape is the one absolute judgement, and it is measured in **deviation** — DTW distance
+divided by sample count, so the number means "average distance from the reference as a
+fraction of the character's box". This matters more than it sounds. The original limit
+was a raw DTW sum of 1.5, which reads as strict but is a **9% mean deviation** —
+ordinary handwriting — so most correct strokes were failed as "off-shape". And because
+the order guard only applies to strokes already under the shape limit, too tight a limit
+silently disables it, letting false "out of order" verdicts through as well. Both
+complaints from the first real drilling session were that one bug.
+
+### Calibration (`stroke_calibration.py` + `static/calibrate.html`)
+
+Thresholds are not constants in the source. They live in the database, are editable at
+runtime from `/calibrate`, and are meant to be chosen by measurement rather than
+argument — hard-coding them is exactly what produced the mistake above.
+
+- **Every check is captured** — the drawn strokes, the verdict, and the thresholds in
+  force — into `stroke_samples`, so an attempt can be re-judged later under different
+  values.
+- **The writer labels disagreements.** When the drill fails an attempt, the result screen
+  offers "I actually drew that correctly": it records the sample as labelled *and*, mid
+  review, re-answers the card as Good so a false alarm costs no repetition. Those rows
+  are the whole point of the table.
+- **`/calibrate`** has a slider per threshold and a replay: it re-judges every labelled
+  attempt under candidate values and reports agreements, false alarms and missed errors.
+  Tuning is moving the slider until the false alarms disappear without the real errors
+  slipping through.
+
+Anything synthetic must be kept out of `stroke_samples`, or the thresholds get fitted to
+a plotter again.
 
 The write drill (`/drill`) uses it in a trace-then-hide loop: study the animated model
 with a live canvas over it, then the model is hidden and the same character written from
@@ -430,6 +457,18 @@ an open question rather than a plan.
 
       Verify a sample by ear before generating in bulk — a wrong accent drilled 200 times
       is worse than no audio at all.
+
+### Stroke thresholds
+
+- [ ] **Tune against real handwriting** — the machinery exists (`/calibrate`, captured
+      samples, replay against labelled attempts), but the current values are still a
+      reasoned starting point rather than a measured one: `ok = 0.19` deviation was
+      chosen as roughly double the demonstrably-too-strict original, not fitted to
+      anything. It needs a few dozen labelled attempts before it means much.
+- [ ] **Per-character or per-stroke-count thresholds** — one global limit treats a
+      one-stroke 一 and a 29-stroke 鬱 the same, and short strokes almost certainly
+      tolerate less absolute deviation than long ones. Worth checking against real
+      samples before adding the complexity.
 
 ### Quality
 - [x] **Page transcription UI** — page reader with SVG bbox overlay; click a region to

@@ -131,3 +131,136 @@ The queries are ordinary reads against a collection opened with the `anki` libra
 against `anki_notes` / `anki_note_words` in `data/wakatta.db`. Nothing here is stored;
 it was all measured. Numbers will drift as the collection is used — treat them as the
 state that motivated the design, not as current facts.
+
+---
+
+# 2026-09-04 — first days of real reviewing, and a pending decision
+
+**Sample size warning.** This covers five days (2026-08-31 to 09-04) and 243 reviews,
+the first genuine study since 2026-04-28. Everything below is suggestive, not settled.
+It is recorded so the decision at the end can be made against fresh numbers later
+rather than re-derived, and so the trend can be compared against something.
+
+## What the five days looked like
+
+| Date | Reviews | Again | Good | Median answer |
+|---|---|---|---|---|
+| 08-31 | 1 | 1 | 0 | 18.1 s |
+| 09-01 | 48 | 21 | 25 | 17.4 s |
+| 09-02 | 27 | 10 | 17 | 21.0 s |
+| 09-03 | 150 | 71 | 79 | 16.5 s |
+| 09-04 | 17 | 7 | 10 | 10.9 s |
+
+**Retention on mature (review-type) cards: 37%**, against an honest historical average
+of 89%. Not attributable to new material — new cards are excluded from that figure.
+Two plausible causes, both expected: four months away from the deck, and the 1,650
+cards left on intervals fabricated by the six button-mashing sessions, which are now
+coming due at intervals never actually earned.
+
+By deck, last five days:
+
+| Deck | Reviews | Again | Rate |
+|---|---|---|---|
+| Japanese::Core 2000 | 179 | 78 | 44% |
+| Japanese::DaKanji | 31 | 19 | 61% |
+| Japanese::Wakatta::Audio Writing | 22 | 13 | 59% |
+| Japanese::Wakatta::Kanji | 10 | 0 | 0% |
+
+The Audio Writing rate is inflated: the stroke validator was failing correct
+handwriting during this period (thresholds fitted to synthetic jitter — see the
+Calibration section of the README).
+
+**The backlog grew**: 694 due on 08-30, **707 on 09-04**, despite 243 reviews. At a 44%
+failure rate the returns outpace the drain.
+
+## Most failures are near-misses
+
+Of every "Again" on a review card in the window:
+
+| Outcome | Count | |
+|---|---|---|
+| Passed the very next relearning step | 47 | **57%** |
+| Failed again on the next step | 17 | 21% |
+| No follow-up yet (session ended) | 18 | 22% |
+
+Agains also take *longer* to answer than Goods — 23.3 s median against 16.6 s — the
+signature of effortful near-miss rather than blank. Kornell, Hays & Bjork (2009) found
+unsuccessful retrieval followed by feedback beats studying the answer outright, so
+these are productive reviews, not waste. The problem is what happens to the card
+afterwards, not that it failed.
+
+Classified by behaviour (see `anki_triage.py`): **38 clean · 58 jog · 24 repeat**, out
+of 120 cards touched. The repeat bucket is 20% and contains exactly who you would
+expect — 原因 (19 lapses), 投資 (22), 給料, 完成, 発表.
+
+## Why the intervals do not recover on their own
+
+The expectation that spaced repetition self-corrects — a jog collapses to a day, then
+climbs exponentially back out — is correct in principle and does not hold here, because
+the base of the exponent is 1.30 rather than 2.5.
+
+| Ease | Reviews to climb 1d → 30d | → 90d | → 365d |
+|---|---|---|---|
+| 130% | 13 | 18 | 23 |
+| 195% | 6 | 7 | 9 |
+| 250% | 4 | 5 | 7 |
+
+And the cards that jog are the floored ones:
+
+| Bucket | Median ease | At the 130% floor |
+|---|---|---|
+| jog | 130% | 49 of 58 (**84%**) |
+| repeat | 130% | 19 of 21 (90%) |
+| clean | 130% | 27 of 38 (71%) |
+
+**47 of 58 jogged cards need 8+ consecutive successes to regain the interval they just
+lost** — and they are by definition the cards that fail, so most will reset partway.
+A treadmill rather than a ramp. This is the ease damage documented above, arriving as a
+throughput problem.
+
+## Pending decision: FSRS
+
+Recommended, not yet done, deferred until more review data exists.
+
+1. Back up the server and bridge collections.
+2. Delete the 2,873 fake reviews — six dates, identified by sub-1.5 s answer times, 2%
+   of the log. FSRS trains on review history, and sub-second perfect recalls would
+   teach it a superhuman memory.
+3. Enable FSRS and optimise against the cleaned history.
+4. Keep triage: FSRS schedules better but will not pull chronic failures out of daily
+   rotation.
+5. Revisit pass/fail grading. Its justification was SM-2's ±15 pp ease mechanics; with
+   ease gone that reasoning lapses, though "do not ask a human to grade what a machine
+   measured" still stands.
+
+**Why FSRS over raising `lapse.mult`** (currently 0%, so every lapse collapses to one
+day): raising it to ~30% is a real improvement but works around a broken exponent.
+FSRS has no ease factor at all, so the 130% floor and everything downstream of it stop
+existing. A third of the Japanese collection is in that floor.
+
+**Unresolved risk, to test before touching the real collection:** it is not known
+whether revlog *deletions* propagate through Anki's sync, or whether the server keeps
+the rows. If they do not propagate, the clean-up needs a full upload to the sync server
+followed by a full download on every other device. Testable against throwaway
+collections and the live sync server without risking anything.
+
+## Also worth noting on this date
+
+- **200 derived notes** exist (141 kanji, 59 audio-writing) of which **189 are still
+  new**, at `new/day = 5` — roughly a month of fresh introductions queued behind an
+  undrained backlog. Worth an explicit decision rather than accumulation.
+- **`stroke_samples` is empty.** The calibration capture is on disk but the running
+  server predates it, so no handwriting samples have been recorded and `/calibrate` has
+  nothing to tune against. Restarting the server starts collection.
+- **No review is logged above the 60 s cap.** The long pauses are absent rather than
+  inflated: they hit the "queue moved on" bug and were refused, so they were never
+  logged at all.
+
+## What to re-measure before deciding
+
+Mature-card retention over a fortnight of consistent reviewing; whether the jog share
+stays near 57%; whether the repeat bucket keeps growing or plateaus; and whether the
+backlog turns over once triage has pulled the chronic failures out. If retention
+recovers toward 85% on its own as the fabricated intervals get re-anchored, the case
+for FSRS weakens considerably — the argument rests on the ease floor, not on the
+retention figure.
