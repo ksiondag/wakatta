@@ -264,3 +264,29 @@ backlog turns over once triage has pulled the chronic failures out. If retention
 recovers toward 85% on its own as the fabricated intervals get re-anchored, the case
 for FSRS weakens considerably — the argument rests on the ease floor, not on the
 retention figure.
+
+## 2026-09-05 — experiments removed
+
+The **derived kanji deck was deleted**: 141 notes, the deck, and the `Wakatta Kanji`
+notetype. It had accumulated 10 reviews. The card asked for a character's meanings,
+both readings and its components at once, and nothing in how Japanese is taught
+resembles it — schools teach kanji inside vocabulary and test with 書き取り, which the
+audio-writing card already is. Deriving it is removed from the code too.
+
+Publishing that removal required a **full upload** to the sync server, since removing a
+notetype is a schema change Anki cannot express incrementally. Checked first: server and
+bridge revlog both at 143,243 with the same newest review, so no history was lost, and
+desktop Anki was behind with nothing unsynced. The pre-upload server state is at
+`~/anki-backups/20260905-210920/server-before-full-upload.anki2`. **Every other device
+needs a one-time full download.**
+
+A **meta deck was created and reverted the same day** — 47 notes about Japanese
+terminology — because it was built before the requirement was understood. Its design is
+now recorded properly under "Meta deck — Deferred" in the README, including the JMdict
+verification that changed the word list three times.
+
+The **stroke sample table was reset** (78 samples archived to
+`~/anki-backups/stroke_samples-20260905-201935.json`). Its labels had been recorded
+under a misunderstanding of what the buttons meant, and some samples came from practice
+rather than review. Samples now carry a `context` column and label themselves from the
+answer given, so neither confusion can recur.

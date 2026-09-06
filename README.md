@@ -165,13 +165,19 @@ the desktop app or a phone. Credentials come from `.env`; see `.env.example`.
   filters for leeches and for notes missing audio. Media plays through
   `/api/anki/media/{filename}`, read from `ANKI_MEDIA_DIR` rather than synced: the files
   are already on this machine in the sync server's own store.
-- **Derivation** (`anki_derive.py`) — turns the surplus already on a note into further
-  notes: the recording alone answered by writing the word, and one note per kanji
-  carrying KANJIDIC2 readings and a KRADFILE component breakdown. Derived notes reuse the
-  source's own `[sound:...]` reference, so no media file is created. Everything lands in
-  `Japanese::Wakatta::*` under its own notetypes, making the whole output reversible by
-  deleting two decks. Idempotent: audio cards dedupe on source note, kanji cards on the
-  character.
+- **Derivation** (`anki_derive.py`) — turns the surplus already on a note into a further
+  note: the recording alone, answered by writing the word. Reuses the source's own
+  `[sound:...]` reference, so no media file is created. Lands in `Japanese::Wakatta::*`
+  under its own notetype, making the output reversible by deleting one deck, and is
+  idempotent — a source that already produced one is skipped.
+
+  A per-kanji derivation existed and was removed: a bare character answered by its
+  meanings, both readings and its components at once is four questions on one
+  self-graded card, and has no counterpart in how Japanese is taught. The breakdown
+  survives as reference on the answer screen, served live from `kanji.py`, where it
+  costs no reviews. `DERIVED_NOTETYPES` refuses to derive from a derived note, which
+  was previously prevented only by an absent adapter entry — accidental protection that
+  would have broken the moment an adapter was added for some other reason.
 - **Review** (`anki_review.py`, `/drill`) — cards come through the real v3 scheduler, so
   deck limits, learning steps and ordering behave exactly as in Anki, and answers land in
   the collection's history like any other. The interaction is chosen by notetype;
@@ -186,6 +192,38 @@ the desktop app or a phone. Credentials come from `.env`; see `.env.example`.
   130% floor, and a third of this collection already sits on that floor. See
   `COLLECTION.md`. Writing quality is still measured and reported, it just cannot move
   scheduling.
+
+### Failure triage (`anki_triage.py`)
+
+Anki collapses every lapse to the same one-day interval, whether the word was missed by
+a hair or never known. Measured over real drilling, **57% of failures pass the very next
+relearning step** — so more than half the daily load is cards being punished for a
+moment's hesitation.
+
+The distinction is observable without asking for it. Fail once and recover: a jog. Fail
+twice inside the window, or fail again immediately after being shown the answer: not
+known. Behaviour rather than a button matters twice over — self-assessment of failure
+magnitude is the judgement the four-button scale was dropped for, and behaviour also
+catches a lucky guess, since passing by chance today and failing twice tomorrow still
+lands the card in the bucket.
+
+Repeats move to `Japanese::Hard`, out of daily rotation, to be tackled deliberately.
+The origin deck is recorded as a tag rather than assumed, because a note's cards can
+live in different decks, and cards that later string two clean passes together come home
+on their own. Re-running moves nothing further. Driven from `/drill` → Session mode,
+preview first.
+
+### Publishing destructive clean-ups (`anki_bridge.full_upload`)
+
+Removing a notetype is a schema change and Anki refuses to express it as an incremental
+sync, so deleting a rejected experiment can only reach the server as a full upload.
+`sync()` will never do that on its own. `full_upload()` exists so that an experiment
+tried and found wanting can actually be removed rather than left in place because the
+tooling made removal awkward — but it refuses unless passed `confirm="overwrite server"`,
+and its docstring names the three things the caller must check first, because the
+function cannot: that the server's revlog count matches so no reviews are lost, that no
+other device holds unsynced work (each must full-download afterwards), and that the
+server's current state is backed up.
 
 ### Stroke Validation (`stroke_validation.py`)
 
@@ -219,10 +257,17 @@ argument — hard-coding them is exactly what produced the mistake above.
 - **Every check is captured** — the drawn strokes, the verdict, and the thresholds in
   force — into `stroke_samples`, so an attempt can be re-judged later under different
   values.
-- **The writer labels disagreements.** When the drill fails an attempt, the result screen
-  offers "I actually drew that correctly": it records the sample as labelled *and*, mid
-  review, re-answers the card as Good so a false alarm costs no repetition. Those rows
-  are the whole point of the table.
+- **The validator recommends; the writer answers.** It used to answer the card itself
+  and offer a correction afterwards, which was backwards: re-answering Good after a
+  false Again does not return the lost interval, it adds a second review — so a known
+  word was being reset by a measurement that is explicitly not yet trusted, and a
+  moment's pen static splitting one stroke in two was enough to do it. The verdict is
+  now shown as advice beside Anki's own interval labels, with again/good buttons.
+- **Labels come from the answer.** Because the writer's rating is the ground truth,
+  every checked review produces a labelled sample as a side effect. Samples also record
+  a `context` of `review` or `practice`, and only review samples are tuned against: a
+  character drawn with the model in mind comes out tidier than one drawn from memory,
+  so mixing practice in biases the thresholds toward passing.
 - **`/calibrate`** has a slider per threshold and a replay: it re-judges every labelled
   attempt under candidate values and reports agreements, false alarms and missed errors.
   Tuning is moving the slider until the false alarms disappear without the real errors
