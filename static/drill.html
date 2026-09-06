@@ -265,6 +265,21 @@ async function api(path, opts) {
 // ── Drawing pad ──────────────────────────────────────────────────────────────
 // Strokes are captured in canvas-relative 0..1 coordinates; the server renormalizes
 // the character as a whole, so pad size and where on the pad you draw don't matter.
+// Strokes are numbered across every pad on the page, not per pad: a word is several
+// canvases but one sequence of pen strokes, and undo has to mean "the last thing I
+// drew". Undoing one stroke from each box, which is what per-pad undo does, is never
+// what anyone wants.
+let strokeSeq = 0;
+
+function undoLastStroke(pads) {
+  let target = null, best = -1;
+  for (const pad of pads) {
+    const n = pad.state.seq.length;
+    if (n && pad.state.seq[n - 1] > best) { best = pad.state.seq[n - 1]; target = pad; }
+  }
+  if (target) target.undo();
+}
+
 function makePad(canvas) {
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
@@ -275,7 +290,7 @@ function makePad(canvas) {
   ctx.lineCap = ctx.lineJoin = 'round';
   ctx.strokeStyle = '#e8e8f0';
 
-  const state = { strokes: [], current: null };
+  const state = { strokes: [], seq: [], current: null };
 
   const pos = e => {
     const r = canvas.getBoundingClientRect();
@@ -302,7 +317,10 @@ function makePad(canvas) {
   });
   const end = e => {
     if (!state.current) return;
-    if (state.current.length >= 2) state.strokes.push(state.current);
+    if (state.current.length >= 2) {
+      state.strokes.push(state.current);
+      state.seq.push(++strokeSeq);
+    }
     state.current = null;
     e.preventDefault();
   };
@@ -312,12 +330,12 @@ function makePad(canvas) {
   return {
     canvas, state,
     clear() {
-      state.strokes = []; state.current = null;
+      state.strokes = []; state.seq = []; state.current = null;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       canvas.classList.remove('ok', 'bad');
     },
     undo() {
-      state.strokes.pop();
+      state.strokes.pop(); state.seq.pop();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       for (const s of state.strokes) for (let i = 1; i < s.length; i++) draw(s[i - 1], s[i]);
     },
@@ -414,7 +432,7 @@ function render() {
     <div class="result" id="result"></div>`;
 
   pads = item.chars.map((_, i) => makePad($('pad' + i)));
-  $('btnUndo').onclick = () => pads.forEach(p => p.undo());
+  $('btnUndo').onclick = () => undoLastStroke(pads);
   $('btnClear').onclick = () => { pads.forEach(p => p.clear()); $('result').innerHTML = ''; };
   $('btnCheck').onclick = check;
   $('btnReveal').onclick = () => reveal(null);
@@ -585,7 +603,7 @@ async function renderGrind() {
         <div class="result" id="gResult"></div>
       </div>`;
     pads = item.chars.map((_, i) => makePad($('gpad' + i)));
-    $('gUndo').onclick = () => pads.forEach(p => p.undo());
+    $('gUndo').onclick = () => undoLastStroke(pads);
     $('gClear').onclick = () => pads.forEach(p => p.clear());
     $('gCheck').onclick = checkGrind;
     $('gDone').onclick = endGrind;
