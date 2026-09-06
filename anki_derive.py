@@ -11,9 +11,15 @@ This module turns that surplus into additional notes:
                   and handwriting production at once. Reuses the source note's own
                   [sound:...] reference verbatim, so no new media file is created and
                   nothing needs a media sync.
-  kanji         — one note per kanji in the word, carrying KANJIDIC2 readings and
-                  meanings plus its KRADFILE component breakdown, for building
-                  mnemonics out of parts.
+
+A per-kanji notetype used to be derived here too: a bare character on the front,
+answered by producing its meanings, both readings and its components at once. It was
+dropped. Four questions on one self-graded card is the "minimum information" mistake
+several times over, and nothing in how Japanese is actually taught resembles being
+shown a character in isolation and asked to produce everything about it — schools teach
+kanji inside vocabulary, and test them with 書き取り, which is what audio_writing is.
+The kanji breakdown itself is not lost: it is reference material on the answer screen,
+served live from kanji.py, where it costs no reviews.
 
 Derived notes live in their own notetypes and their own Japanese::Wakatta:: subdecks,
 never mixed into the source deck, so the whole output is reversible by deleting two
@@ -28,7 +34,6 @@ from dataclasses import dataclass, field as dc_field
 from sqlalchemy.engine import Engine
 
 import anki_bridge
-import kanji as kanji_mod
 
 DECK_PREFIX = "Japanese::Wakatta"
 _RE_KANJI = re.compile(r"[㐀-䶿一-鿿]")
@@ -36,7 +41,6 @@ _RE_HTML = re.compile(r"<[^>]+>")
 _RE_SOUND = re.compile(r"\[sound:([^\]]+)\]")
 
 NOTETYPE_AUDIO_WRITING = "Wakatta Audio Writing"
-NOTETYPE_KANJI = "Wakatta Kanji"
 
 
 @dataclass
@@ -137,21 +141,6 @@ _SPECS = {
 {{#Sentence}}<div class="sentence">{{Sentence}}</div>{{/Sentence}}
 {{#SentenceAudio}}<div>{{SentenceAudio}}</div>{{/SentenceAudio}}"""),
     },
-    NOTETYPE_KANJI: {
-        "fields": ["Kanji", "Meanings", "Onyomi", "Kunyomi", "Components",
-                   "Radical", "StrokeCount", "ExampleWord", "ExampleReading",
-                   "SourceNoteId", "SourceDeck"],
-        "sort": 0,
-        "template": ("Kanji parts", """<div class="jp">{{Kanji}}</div>
-<div class="hint">Meaning, readings, and what it's built from?</div>""", """{{FrontSide}}
-<hr id=answer>
-<div class="meaning">{{Meanings}}</div>
-<div class="reading">音 {{Onyomi}}</div>
-<div class="reading">訓 {{Kunyomi}}</div>
-<div class="components">{{Components}}</div>
-<div class="hint">{{Radical}}　{{StrokeCount}} strokes</div>
-{{#ExampleWord}}<div class="sentence">{{ExampleWord}}　{{ExampleReading}}</div>{{/ExampleWord}}"""),
-    },
 }
 
 
@@ -211,56 +200,39 @@ def _plan_audio_writing(src: dict, note: dict, existing: set[int]) -> Derived:
     return d
 
 
+def _plan_audio_writing(src: dict, note: dict, existing: set[int]) -> Derived:
+    d = Derived(
+        kind="audio_writing", notetype=NOTETYPE_AUDIO_WRITING,
+        deck=f"{DECK_PREFIX}::Audio Writing",
+        source_note_id=note["note_id"],
+        fields={
+            "Word": src["word"], "Reading": src.get("reading", ""),
+            "Meaning": src.get("meaning", ""), "Audio": src.get("audio", ""),
+            "Sentence": src.get("sentence", ""),
+            "SentenceAudio": src.get("sentence_audio", ""),
+            "SourceNoteId": str(note["note_id"]),
+            "SourceDeck": ", ".join(note["decks"]),
+        },
+    )
+    if note["note_id"] in existing:
+        d.skipped = "already derived"
+    elif not _RE_SOUND.search(src.get("audio", "")):
+        d.skipped = "source note has no audio"
+    elif not src["word"]:
+        d.skipped = "source note has no word"
+    return d
+
+
 # KRADFILE can only spell components with JIS X 0208 characters, so radicals outside
 # that codeset are written as a stand-in kanji containing them — 汁 for 氵, 忙 for 忄,
 # and so on (see the comment above _RADICAL_VARIANT_ALIASES in kanji.py). That's the
 # right key for matching a *drawn* radical, but showing "渇 is built from 汁" on a card
 # is simply false, so display flips the mapping back to the glyph actually written.
-_COMPONENT_DISPLAY = {v: k for k, v in kanji_mod._RADICAL_VARIANT_ALIASES.items()}
-
-
-def _components_for_display(entry: dict) -> str:
-    return " ".join(_COMPONENT_DISPLAY.get(c, c) for c in (entry.get("components") or []))
-
-
 def _radical_label(entry: dict) -> str:
     rad = entry.get("radical") or {}
     if not rad:
         return ""
     return f"{rad.get('char', '')} {rad.get('name', '')}".strip()
-
-
-def _plan_kanji(engine: Engine, src: dict, note: dict,
-                existing_chars: set[str]) -> list[Derived]:
-    out = []
-    for char in dict.fromkeys(_RE_KANJI.findall(src.get("word", ""))):
-        entry = kanji_mod.lookup(engine, char) or {}
-        d = Derived(
-            kind="kanji", notetype=NOTETYPE_KANJI,
-            deck=f"{DECK_PREFIX}::Kanji",
-            source_note_id=note["note_id"],
-            fields={
-                "Kanji": char,
-                "Meanings": ", ".join(entry.get("meanings", []) or []),
-                "Onyomi": "、".join(entry.get("on", []) or []),
-                "Kunyomi": "、".join(entry.get("kun", []) or []),
-                "Components": _components_for_display(entry),
-                "Radical": _radical_label(entry),
-                "StrokeCount": str(entry.get("stroke_count") or ""),
-                "ExampleWord": src.get("word", ""),
-                "ExampleReading": src.get("reading", ""),
-                "SourceNoteId": str(note["note_id"]),
-                "SourceDeck": ", ".join(note["decks"]),
-            },
-        )
-        if char in existing_chars:
-            # Deduplicated on the character itself, not the source note: 日 met in
-            # five different words is still one kanji worth one card.
-            d.skipped = "kanji already has a card"
-        elif not entry:
-            d.skipped = "not in KANJIDIC2"
-        out.append(d)
-    return out
 
 
 def plan(engine: Engine, note_ids: list[int], kinds: list[str]) -> list[Derived]:
@@ -271,11 +243,6 @@ def plan(engine: Engine, note_ids: list[int], kinds: list[str]) -> list[Derived]
         # the collection. Both lookups below already treat a missing notetype as
         # "nothing derived yet", which is exactly right before the first apply().
         existing_aw = _existing_sources(col, NOTETYPE_AUDIO_WRITING)
-        kanji_nt = col.models.by_name(NOTETYPE_KANJI)
-        existing_chars = set()
-        if kanji_nt is not None:
-            for nid in col.find_notes(f'mid:{kanji_nt["id"]}'):
-                existing_chars.add(col.get_note(nid).fields[0].strip())
 
         for note_id in note_ids:
             note = anki_bridge.note(engine, note_id)
@@ -290,13 +257,6 @@ def plan(engine: Engine, note_ids: list[int], kinds: list[str]) -> list[Derived]
                 continue
             if "audio_writing" in kinds:
                 results.append(_plan_audio_writing(src, note, existing_aw))
-            if "kanji" in kinds:
-                planned = _plan_kanji(engine, src, note, existing_chars)
-                # Within one planning run, the first card for a character claims it.
-                for d in planned:
-                    if d.skipped is None:
-                        existing_chars.add(d.fields["Kanji"])
-                results.extend(planned)
     return results
 
 

@@ -875,7 +875,6 @@ function deriveBarHtml(chars) {
   return `<div class="derivebar">
       <button id="dReplay">↻ replay strokes</button>
       <button id="dWrite">+ writing card</button>
-      <button id="dKanji">+ kanji card${chars.length > 1 ? 's' : ''}</button>
       <button id="dGrind" class="primary">Grind this word</button>
       <span class="status" id="dStatus"></span>
     </div>`;
@@ -892,7 +891,6 @@ function wireDeriveBar(item, noteId) {
     card.onclick = () => animateStrokes(card);
   });
   $('dWrite').onclick = () => deriveHere(noteId, ['audio_writing']);
-  $('dKanji').onclick = () => deriveHere(noteId, ['kanji']);
   $('dGrind').onclick = () => startGrind(item);
 }
 

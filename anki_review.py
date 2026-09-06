@@ -25,7 +25,6 @@ import anki_derive
 # notetype name -> interaction the client should present
 INTERACTIONS: dict[str, str] = {
     anki_derive.NOTETYPE_AUDIO_WRITING: "audio_writing",
-    anki_derive.NOTETYPE_KANJI: "self_graded",
 }
 DEFAULT_INTERACTION = "self_graded"
 
