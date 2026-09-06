@@ -433,7 +433,8 @@ async function check() {
     try {
       results.push(await api('/api/validate-strokes', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ char: item.chars[i], strokes }),
+        body: JSON.stringify({ char: item.chars[i], strokes,
+                               context: mode === 'review' ? 'review' : 'practice' }),
       }));
     } catch (e) { results.push({ error: e.message }); }
   }
@@ -451,87 +452,52 @@ async function check() {
   btn.disabled = false; btn.textContent = 'Check';
   await reveal(results);
   lastResults = results;
-  if (mode === 'review' && reviewCard) {
-    await submit({ card_id: reviewCard.card_id, validations: results,
-                   milliseconds: Date.now() - shownAt });
-  }
-  offerDisagreement(results);
+  if (mode === 'review' && reviewCard) offerRating(results);
 }
 
 let lastResults = null;
 
-// The validator's thresholds can only be chosen from real handwriting. Saying "that
-// was actually right" both records the sample that proves it and, mid-review, undoes
-// the failure it caused — a false alarm shouldn't cost a repetition while the numbers
-// are still being tuned.
-function offerDisagreement(results) {
-  const ids = (results || []).filter(r => r && r.sample_id).map(r => r.sample_id);
-  if (!ids.length) return;
-  const failed = results.some(r => r && !r.correct);
+// The validator recommends; the writer decides.
+//
+// It used to answer the card itself and then offer a correction, which was the wrong
+// way round: re-answering Good after a false Again does not give the lost interval
+// back, it just adds a second review. A known word was being reset on a measurement
+// that is explicitly not yet trusted — and pen input makes that worse, since a
+// moment's static can split one stroke into several and fail the count outright.
+//
+// So the verdict is advice, shown next to Anki's own interval labels, and the answer
+// is the writer's. The pairing of the two is also, for free, the labelled sample the
+// thresholds get tuned from: every review now says whether the validator agreed with
+// a human, instead of needing a separate button pressed out of goodwill.
+function offerRating(results) {
+  const failed = results.some(r => !r || !r.correct);
+  const reasons = (results || []).flatMap(r => (r && r.issues) || []).slice(0, 3);
   const box = document.createElement('div');
-  box.className = 'disagree';
+  box.className = 'applied';
   box.innerHTML =
-    `<button id="dsAgree">${failed ? 'I actually drew that correctly' : 'That was wrong, actually'}</button>` +
-    `<div class="note" id="dsNote"></div>`;
+    `<div class="rating ${failed ? 'again' : 'good'}">` +
+    `suggests ${failed ? 'AGAIN' : 'GOOD'}</div>` +
+    `<div class="why">${reasons.length ? reasons.join('; ') : 'no problems found'}</div>` +
+    `<div class="why" style="margin-top:4px">Your call — the check is still being calibrated.</div>` +
+    `<div class="controls">
+       <button id="rAgain"${failed ? ' class="primary"' : ''}>again ` +
+         `<span class="k">${(reviewCard.next_states || [])[0] || ''}</span></button>
+       <button id="rGood"${failed ? '' : ' class="primary"'}>good ` +
+         `<span class="k">${(reviewCard.next_states || [])[2] || ''}</span></button>
+     </div>`;
   $('result').appendChild(box);
-  $('dsAgree').onclick = async () => {
-    const label = failed ? 'correct' : 'incorrect';
-    for (const id of ids) {
-      await api('/api/strokes/label', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sample_id: id, user_label: label }),
-      }).catch(() => {});
-    }
-    $('dsAgree').disabled = true;
-    $('dsNote').textContent = failed
-      ? 'Recorded. Re-answering the card as correct…' : 'Recorded as a missed error.';
-    if (failed && mode === 'review' && reviewCard) {
-      // Answer it Good so the false alarm doesn't cost a repetition.
-      const r = await api('/api/anki/review/answer', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ card_id: reviewCard.card_id, rating: 'good' }),
-      }).catch(e => ({ error: e.message }));
-      $('dsNote').textContent = r && r.error
-        ? `Recorded, but the card had already moved on (${r.error}).`
-        : 'Recorded, and the card was re-answered as correct.';
-    }
-    $('dsNote').textContent += '  Tune the thresholds at /calibrate.';
-  };
+  for (const [id, rating] of [['rAgain', 'again'], ['rGood', 'good']]) {
+    $(id).onclick = async () => {
+      $('rAgain').disabled = $('rGood').disabled = true;
+      await submit({
+        card_id: reviewCard.card_id,
+        rating,                                   // the writer's decision answers the card
+        validations: results,                     // the verdict, for calibration only
+        milliseconds: Date.now() - shownAt,
+      });
+    };
+  }
 }
-
-async function reveal(results) {
-  const item = queue[idx];
-  revealed = true;
-  const noteId = (reviewCard && reviewCard.note_id) || item.note_id;
-  $('result').innerHTML = await breakdownCards(item.chars, results) + `
-    <div class="answer">
-      <div class="word">${item.word}</div>
-      <div class="reading">${item.reading}</div>
-      <div class="meaning">${item.meaning}</div>
-      ${item.sentence ? `<div class="sentence">${item.sentence}</div>` : ''}
-    </div>` + deriveBarHtml(item.chars);
-  animateStrokes($('result'));
-  wireDeriveBar(item, noteId);
-}
-
-// Create cards from the answer screen, for the word actually in front of you.
-async function deriveHere(noteId, kinds) {
-  if (!noteId) { $('dStatus').textContent = 'no note id for this card'; return; }
-  $('dStatus').textContent = 'creating…';
-  try {
-    const r = await api('/api/anki/derive/apply', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ note_ids: [noteId], kinds }),
-    });
-    const made = r.notes.filter(d => !d.skipped);
-    const skipped = r.notes.filter(d => d.skipped);
-    $('dStatus').textContent =
-      `${r.created} created` +
-      (skipped.length ? ` · skipped: ${skipped.map(d => d.skipped).join('; ')}` : '') +
-      (r.created ? ' — new cards need new/day > 0 on that deck to appear' : '');
-  } catch (e) { $('dStatus').textContent = e.message; }
-}
-
 
 // ── Grind: restudy -> hide -> write from memory -> check, repeated ───────────
 //
@@ -636,7 +602,7 @@ async function checkGrind() {
     try {
       results.push(await api('/api/validate-strokes', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ char: item.chars[i], strokes }),
+        body: JSON.stringify({ char: item.chars[i], strokes, context: 'practice' }),
       }));
     } catch (e) { results.push({ error: e.message }); }
   }
@@ -1008,10 +974,12 @@ async function submit(payload) {
   box.className = 'applied';
   box.innerHTML = `<div class="rating ${res.rating}">${res.rating.toUpperCase()}` +
     `${res.interval ? ` · next in ${res.interval}` : ''}</div>` +
-    `<div class="why">${res.reason || 'graded by you'}</div>` +
+    (res.agreement === 'disagreed'
+      ? `<div class="why">Recorded — the check disagreed with you, which is exactly the
+         sample /calibrate needs.</div>`
+      : `<div class="why">${res.reason || ''}</div>`) +
     (res.quality ? `<div class="why">writing: ${res.quality}` +
-      `${res.worst_distance != null ? ` (worst stroke ${res.worst_distance})` : ''}` +
-      ` — not counted toward the grade</div>` : '');
+      `${res.worst_distance != null ? ` (worst stroke ${res.worst_distance})` : ''}</div>` : '');
   $('stage').appendChild(box);
   const nb = document.createElement('div');
   nb.className = 'controls';

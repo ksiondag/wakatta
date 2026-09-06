@@ -793,6 +793,7 @@ class ValidateStrokesRequest(BaseModel):
     char: str
     strokes: list[Stroke]
     capture: bool = True          # keep the attempt so thresholds can be tuned on it
+    context: str = "review"       # "review" | "practice" — practice is kept but not tuned on
 
 
 class StrokeSettings(BaseModel):
@@ -1480,7 +1481,8 @@ def validate_strokes(req: ValidateStrokesRequest):
     if req.capture and "error" not in result:
         # Every attempt is kept. The thresholds can only be chosen from real
         # handwriting, and the disagreements are the rows that matter.
-        result["sample_id"] = stroke_calibration.record(engine, req.char, raw, result, cfg)
+        result["sample_id"] = stroke_calibration.record(
+            engine, req.char, raw, result, cfg, context=req.context)
     return result
 
 
@@ -1617,10 +1619,13 @@ async def anki_review_answer(req: ReviewAnswer, push: bool = True):
     graded by what was measured, not by what the reviewer thought of it.
     """
     graded = None
-    rating = req.rating
     if req.validations is not None:
         graded = anki_review.grade(req.validations)
-        rating = graded["rating"]
+    # An explicit rating always wins. The validator recommends; it does not answer.
+    # It used to, and a false "off-shape" or a pen glitch that split one stroke in two
+    # would reset a known card — with the correction arriving too late to give the
+    # interval back. Its verdict is now advice plus a labelled sample.
+    rating = req.rating or (graded and graded["rating"])
     if rating is None:
         raise HTTPException(400, "Provide either rating or validations")
 
@@ -1634,6 +1639,16 @@ async def anki_review_answer(req: ReviewAnswer, push: bool = True):
         result["quality"] = graded["quality"]
         result["worst_distance"] = graded["worst_distance"]
         result["off_shape_strokes"] = graded.get("off_shape_strokes", 0)
+        result["suggested"] = graded["rating"]
+        result["agreement"] = "agreed" if graded["rating"] == rating else "disagreed"
+        # Every review that involved a check now labels its own samples: the writer's
+        # answer is the ground truth the thresholds are tuned against, so calibration
+        # data accumulates from ordinary use instead of needing a button pressed.
+        for v in req.validations or []:
+            sid = v.get("sample_id")
+            if sid:
+                stroke_calibration.label(
+                    engine, sid, "correct" if rating != "again" else "incorrect")
     if push:
         try:
             result["sync"] = await asyncio.to_thread(anki_bridge.sync)

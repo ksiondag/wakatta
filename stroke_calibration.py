@@ -6,10 +6,15 @@ how much better a cross-assignment must score before it counts as evidence of wr
 stroke order. The original values were derived by perturbing KanjiVG's own strokes
 with gaussian noise, which turned out to describe a plotter rather than a hand.
 
-So the thresholds live here, in the database, editable at runtime — and every
-attempt is kept, with whatever the validator concluded, so the values can be chosen
-against real handwriting instead of guessed. An attempt the writer marks as actually
-correct while the validator failed it is the single most useful row in the table.
+So the thresholds live here, in the database, editable at runtime — and every attempt
+is kept, with whatever the validator concluded, so the values can be chosen against
+real handwriting instead of guessed.
+
+The label comes from the review itself. The validator only *recommends* a rating; the
+writer answers the card, and that answer is the ground truth. Every checked review
+therefore produces a labelled sample as a side effect, and the rows where the two
+disagree — a card the writer passed that the validator failed — are the ones the
+thresholds are actually fitted to.
 
 Distances are stored and compared as *deviation*: DTW distance divided by the number
 of sample points, which makes the number mean "average distance between the stroke
@@ -56,6 +61,7 @@ _SCHEMA = [
         result     TEXT NOT NULL,   -- JSON: what validate() concluded at the time
         auto_ok    INTEGER NOT NULL,-- whether the validator called it correct
         user_label TEXT,            -- "correct" | "incorrect" | NULL if unjudged
+        context    TEXT NOT NULL DEFAULT 'review',  -- "review" | "practice"
         settings   TEXT NOT NULL    -- JSON: thresholds in force for that verdict
     )
     """,
@@ -91,16 +97,26 @@ def set_settings(engine: Engine, values: dict) -> dict:
     return settings(engine)
 
 
-def record(engine: Engine, char: str, strokes: list, result: dict, used: dict) -> int:
-    """Keep an attempt so it can be re-judged later under different thresholds."""
+def record(engine: Engine, char: str, strokes: list, result: dict, used: dict,
+           context: str = "review") -> int:
+    """Keep an attempt so it can be re-judged later under different thresholds.
+
+    `context` separates a genuine from-memory review attempt from practice — the
+    grind, or a character drawn after the answer was already showing. Both are real
+    handwriting, but practice strokes are produced with the model in mind and run
+    tidier, so mixing them into the calibration set biases the thresholds toward
+    passing. Only review samples are tuned against by default.
+    """
     build_schema(engine)
     with engine.begin() as conn:
         return conn.execute(text(
             "INSERT INTO stroke_samples (created_at, char, strokes, result, auto_ok, "
-            "user_label, settings) VALUES (:t, :c, :s, :r, :a, NULL, :g)"),
+            "user_label, context, settings) VALUES (:t, :c, :s, :r, :a, NULL, :x, :g)"),
             {"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "c": char,
              "s": json.dumps(strokes), "r": json.dumps(result),
-             "a": int(bool(result.get("correct"))), "g": json.dumps(used)}
+             "a": int(bool(result.get("correct"))),
+             "x": context if context in ("review", "practice") else "practice",
+             "g": json.dumps(used)}
         ).lastrowid
 
 
@@ -119,7 +135,7 @@ def samples(engine: Engine, *, only_labelled: bool = False, limit: int = 200) ->
     where = "WHERE user_label IS NOT NULL" if only_labelled else ""
     with engine.connect() as conn:
         rows = conn.execute(text(
-            f"SELECT id, created_at, char, result, auto_ok, user_label, strokes "
+            f"SELECT id, created_at, char, result, auto_ok, user_label, context, strokes "
             f"FROM stroke_samples {where} ORDER BY id DESC LIMIT :n"), {"n": limit}).mappings().all()
     out = []
     for r in rows:
@@ -129,6 +145,7 @@ def samples(engine: Engine, *, only_labelled: bool = False, limit: int = 200) ->
         out.append({
             "id": r["id"], "created_at": r["created_at"], "char": r["char"],
             "auto_ok": bool(r["auto_ok"]), "user_label": r["user_label"],
+            "context": r["context"],
             "issues": result.get("issues", []),
             "worst_deviation": round(max(devs), 3) if devs else None,
             "deviations": [round(d, 3) for d in devs],
@@ -152,7 +169,7 @@ def replay(engine: Engine, candidate: dict, db) -> dict:
     with engine.connect() as conn:
         rows = conn.execute(text(
             "SELECT id, char, strokes, user_label FROM stroke_samples "
-            "WHERE user_label IS NOT NULL")).mappings().all()
+            "WHERE user_label IS NOT NULL AND context = 'review'")).mappings().all()
 
     false_alarm = miss = agree = 0
     disagreements = []

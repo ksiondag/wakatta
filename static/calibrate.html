@@ -122,8 +122,11 @@ td.ch { font-size: 1.5rem; line-height: 1; }
     <div class="card">
       <h2>Attempts</h2>
       <div class="lede">
-        Every check is kept. The useful rows are the disagreements — where you told
-        the drill it was wrong about you. Mark any row here too.
+        Every check is kept. A label says whether <em>your writing</em> was actually
+        acceptable — not whether you knew the word, and not whether the validator was
+        right. Reviews label themselves from the again/good you press; practice
+        attempts are kept but never tuned against, because writing with the answer in
+        front of you comes out tidier than writing from memory.
       </div>
       <div id="samples"><div class="msg">Loading…</div></div>
     </div>
@@ -179,8 +182,8 @@ async function loadSamples() {
       <td class="dev">${r.strokes_drawn}/${r.strokes_expected}</td>
       <td>${(r.issues || []).slice(0, 2).join('; ') || '—'}</td>
       <td>
-        <button data-id="${r.id}" data-l="correct">was right</button>
-        <button data-id="${r.id}" data-l="incorrect">was wrong</button>
+        <button data-id="${r.id}" data-l="correct">my writing was fine</button>
+        <button data-id="${r.id}" data-l="incorrect">my writing was wrong</button>
       </td></tr>`).join('')}</tbody></table>`;
   $('samples').querySelectorAll('button[data-id]').forEach(b => {
     b.onclick = async () => {
