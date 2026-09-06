@@ -42,6 +42,13 @@ _RE_SOUND = re.compile(r"\[sound:([^\]]+)\]")
 
 NOTETYPE_AUDIO_WRITING = "Wakatta Audio Writing"
 
+# Notetypes this module produces. Nothing derives from them: a listen-and-write card
+# made out of a listen-and-write card is just a duplicate. Until now that was prevented
+# only by their absence from _SOURCE_ADAPTERS, which is accidental protection — adding
+# an adapter so some other caller could read their fields would have quietly restored
+# the bug. The guard is explicit instead.
+DERIVED_NOTETYPES = {NOTETYPE_AUDIO_WRITING}
+
 
 @dataclass
 class Derived:
@@ -247,6 +254,11 @@ def plan(engine: Engine, note_ids: list[int], kinds: list[str]) -> list[Derived]
         for note_id in note_ids:
             note = anki_bridge.note(engine, note_id)
             if note is None:
+                continue
+            if note["notetype"] in DERIVED_NOTETYPES:
+                results.append(Derived(
+                    kind="-", notetype=note["notetype"], deck="-", fields={},
+                    source_note_id=note_id, skipped="already a derived card"))
                 continue
             src = _extract(note)
             if src is None:
