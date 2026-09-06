@@ -232,6 +232,37 @@ def sync(full_download_if_needed: bool = True) -> dict:
         return {"status": names.get(required, str(required)).lower()}
 
 
+def full_upload(confirm: str = "") -> dict:
+    """Overwrite the server with this collection. Destructive, and deliberately awkward.
+
+    `sync()` will never do this on its own: a full upload discards whatever the server
+    holds, and every other device then has to take a one-time full download. But some
+    clean-ups can only be published this way — removing a notetype is a schema change,
+    and Anki refuses to express it as an incremental sync — and an experiment that has
+    been tried and rejected should be removable rather than left lying around because
+    the tooling made it inconvenient.
+
+    Check before calling, because this function cannot:
+      * the server's revlog count matches this collection's, so no reviews are lost;
+      * no other device holds unsynced work, since it will have to full-download;
+      * the server's current state is backed up, because it is about to be replaced.
+
+    Pass confirm="overwrite server" to acknowledge all three.
+    """
+    if confirm != "overwrite server":
+        return {"error": 'refused: pass confirm="overwrite server" (see the docstring)'}
+    creds = credentials()
+    if creds is None:
+        raise RuntimeError("Anki sync is not configured — see .env.example")
+    endpoint, user, password = creds
+    with open_collection() as col:
+        auth = col.sync_login(username=user, password=password, endpoint=endpoint)
+        before = col.db.scalar("select count(*) from revlog")
+        col.full_upload_or_download(auth=auth, server_usn=None, upload=True)
+        return {"status": "uploaded", "notes": col.note_count(), "revlog": before,
+                "note": "every other device must now take a one-time full download"}
+
+
 # ── Projection into the shared db ──────────────────────────────────────────────
 
 def is_ready(engine: Engine) -> bool:
