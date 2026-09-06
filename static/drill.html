@@ -872,12 +872,56 @@ async function breakdownCards(chars, results) {
 }
 
 function deriveBarHtml(chars) {
+  // The writing-card button starts disabled and is settled by a preview call: whether
+  // one can be made depends on the note, and finding that out by pressing the button
+  // and reading a skip reason afterwards is the wrong way round.
   return `<div class="derivebar">
       <button id="dReplay">↻ replay strokes</button>
-      <button id="dWrite">+ writing card</button>
+      <button id="dWrite" disabled title="checking…">+ writing card</button>
       <button id="dGrind" class="primary">Grind this word</button>
       <span class="status" id="dStatus"></span>
     </div>`;
+}
+
+// Skip reasons from anki_derive, turned into something a button can say for itself.
+// null means "this note can never be a source" — drop the button rather than show a
+// disabled one explaining something the card's own type already makes obvious.
+const DERIVE_HIDE = ['already a derived card', 'unsupported notetype'];
+
+const DERIVE_BLOCKED = {
+  'already derived': ['writing card exists',
+    'A writing card has already been made from this note.'],
+  'source note has no audio': ['+ writing card',
+    'This note has no [sound:…] recording, so there would be nothing to play as the prompt. Audio for these decks is still to be sourced.'],
+  'source note has no word': ['+ writing card',
+    'This note has no written form to answer with.'],
+};
+
+async function settleDeriveButton(noteId) {
+  const btn = $('dWrite');
+  if (!btn) return;
+  if (!noteId) {
+    btn.disabled = true; btn.title = 'No note id for this card.'; return;
+  }
+  let plan;
+  try {
+    plan = await api('/api/anki/derive/preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note_ids: [noteId], kinds: ['audio_writing'] }),
+    });
+  } catch (e) {
+    btn.disabled = true; btn.title = e.message; return;
+  }
+  const d = (plan.notes || [])[0];
+  if (!d) { btn.disabled = true; btn.title = 'Nothing to derive from this note.'; return; }
+  if (d.skipped) {
+    if (DERIVE_HIDE.some(h => d.skipped.startsWith(h))) { btn.remove(); return; }
+    const [label, why] = DERIVE_BLOCKED[d.skipped] || ['+ writing card', d.skipped];
+    btn.textContent = label; btn.disabled = true; btn.title = why;
+  } else {
+    btn.textContent = '+ writing card'; btn.disabled = false;
+    btn.title = `Creates a listen-and-write card in ${d.deck}.`;
+  }
 }
 
 function wireDeriveBar(item, noteId) {
@@ -892,6 +936,7 @@ function wireDeriveBar(item, noteId) {
   });
   $('dWrite').onclick = () => deriveHere(noteId, ['audio_writing']);
   $('dGrind').onclick = () => startGrind(item);
+  settleDeriveButton(noteId);
 }
 
 async function loadDeckPicker(preferred) {
