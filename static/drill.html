@@ -254,7 +254,7 @@ button.primary { border-color: #7070cc; background: #2e2e56; }
 
 <script>
 const $ = id => document.getElementById(id);
-let queue = [], idx = 0, pads = [], revealed = false;
+let queue = [], idx = 0, pads = [];
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -407,7 +407,6 @@ function kanjiInfoHtml(info) {
 // ── Rendering ────────────────────────────────────────────────────────────────
 function render() {
   const item = queue[idx];
-  revealed = false;
   $('progress').textContent = `${idx + 1} / ${queue.length}`;
   $('stage').innerHTML = `
     <div class="prompt">
@@ -515,6 +514,37 @@ function offerRating(results) {
       });
     };
   }
+}
+
+async function reveal(results) {
+  const item = queue[idx];
+  const noteId = (reviewCard && reviewCard.note_id) || item.note_id;
+  $('result').innerHTML = await breakdownCards(item.chars, results) + `
+    <div class="answer">
+      <div class="word">${item.word}</div>
+      <div class="reading">${item.reading}</div>
+      <div class="meaning">${item.meaning}</div>
+      ${item.sentence ? `<div class="sentence">${item.sentence}</div>` : ''}
+    </div>` + deriveBarHtml(item.chars);
+  animateStrokes($('result'));
+  wireDeriveBar(item, noteId);
+}
+
+// Create cards from the answer screen, for the word actually in front of you.
+async function deriveHere(noteId, kinds) {
+  if (!noteId) { $('dStatus').textContent = 'no note id for this card'; return; }
+  $('dStatus').textContent = 'creating…';
+  try {
+    const r = await api('/api/anki/derive/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note_ids: [noteId], kinds }),
+    });
+    const skipped = r.notes.filter(d => d.skipped);
+    $('dStatus').textContent =
+      `${r.created} created` +
+      (skipped.length ? ` · skipped: ${skipped.map(d => d.skipped).join('; ')}` : '') +
+      (r.created ? ' — new cards need new/day > 0 on that deck to appear' : '');
+  } catch (e) { $('dStatus').textContent = e.message; }
 }
 
 // ── Grind: restudy -> hide -> write from memory -> check, repeated ───────────
