@@ -144,6 +144,46 @@ character appends it to "Your text":
     is itself a signal that this is where the read went wrong
   - Read-only: nothing is saved until a character is clicked
 
+### The sync server this depends on (not in this repo)
+
+The bridge is a *client*. The collection itself lives on a self-hosted Anki sync server
+running on the same machine, which is set up outside this repository and is not version
+controlled — the one part of the system a fresh clone does not give you.
+
+```
+~/.local/share/anki-sync-server/
+  .venv/                  the `anki` package (26.8.x), installed on its own
+  env                     SYNC_HOST/PORT/USER1, mode 600
+  data/silk/              collection.anki2, media.db, media/  (~1.3 GB, mostly media)
+~/.config/systemd/user/anki-sync-server.service
+```
+
+It is the sync server built into the `anki` Python package (`python -m anki.syncserver`),
+run as a **systemd user unit**, enabled with lingering on so it starts at boot without a
+login. It binds to the machine's **Tailscale address** (`SYNC_HOST=100.64.0.2`, port
+8080) rather than `0.0.0.0`, so it is reachable from the tailnet and from nothing else —
+`100.64.0.2` is also a local address on this machine, routed over `lo`, so the same URL
+works here as on the iPad.
+
+```bash
+systemctl --user status anki-sync-server
+journalctl --user -u anki-sync-server -f
+```
+
+Two things worth knowing:
+
+- **Its credentials are its own.** `SYNC_USER1` in that `env` file has no relationship to
+  any AnkiWeb account — a self-hosted server cannot use AnkiWeb credentials. The same
+  values go in this repo's `.env` for the bridge to log in with.
+- **Its media directory is what `ANKI_MEDIA_DIR` points at.** The bridge deliberately
+  does not sync media (it would be a third copy of 1.3 GB already on this disk), so
+  playback reads straight out of the server's own store. If wakatta is ever run on a
+  different host from the sync server, unset `ANKI_MEDIA_DIR` and populate the bridge's
+  own media directory with a real media sync instead.
+
+HTTPS is not available on this tailnet (Headscale, no cert support), so this is plain
+HTTP over the tunnel. AnkiMobile and AnkiDroid both accept that.
+
 ### Anki Bridge (`anki_bridge.py` + `anki_derive.py` + `anki_review.py` + `static/anki.html` + `static/drill.html`)
 
 Wakatta does not schedule its own cards. A self-hosted Anki sync server holds the
