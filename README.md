@@ -458,6 +458,71 @@ an open question rather than a plan.
       Verify a sample by ear before generating in bulk — a wrong accent drilled 200 times
       is worse than no audio at all.
 
+### Meta deck — Deferred
+
+- [ ] **Vocabulary for talking about Japanese, in Japanese.** Not a category label for
+      other decks — a subject in its own right. Two overlapping kinds of content: the
+      metalinguistic terminology needed to read a Japanese explanation of the writing
+      system (部首, 音読み, 形声文字, 偏, 旁), and the working language for having the
+      conversation at all (意味, 読み方, これは日本語で何と言いますか). The leverage is
+      that it makes a monolingual dictionary, a Japanese grammar explanation, or a
+      teacher usable — unlike a vocabulary card, which only pays for itself.
+
+      **Card shape, decided:** front = the written word, back = furigana + definition.
+      This asks two questions at once, the same "two jobs" problem as the imported
+      vocabulary cards, and is accepted here deliberately: for a word like 部首 the
+      reading *is* most of what is unknown, and the deck is small. Repeats with other
+      decks are fine.
+
+      **Verified against the local JMdict** (`dictionary.lookup(engine, surface=...)`),
+      which changed the list three times over and is worth redoing if it is ever
+      regenerated:
+
+      - 指事文字 and 会意文字 are **not in JMdict**. Their readings (しじもじ, かいいもじ)
+        are standard but unconfirmed locally.
+      - **The bare position words are a trap.** Only 偏 (へん) and 旁 (つくり) have the
+        radical sense as their primary meaning. 冠 is "a cap worn by Shinto clergy",
+        脚 is "foot; paw; arm of an octopus", and 垂れ is **"sauce"**. Teaching them as
+        standalone cards would teach a wrong primary meaning, so the other positions
+        should be taught only inside radical names — 草冠, 病垂, 国構え, 列火 — where
+        the suffix is unambiguous, which is also how they are actually met.
+      - Two readings need pinning against JMdict's default: 文 defaults to ふみ
+        ("letter, mail") where ぶん "sentence" is wanted, and 訳 to わけ ("reason")
+        where やく "translation" is wanted.
+
+      **The 54 verified entries**, by group:
+
+      *Writing system* — 漢字 かんじ · 平仮名 ひらがな · 片仮名 カタカナ · 文字 もじ ·
+      部首 ぶしゅ · 音読み おんよみ · 訓読み くんよみ · 送り仮名 おくりがな ·
+      振り仮名 ふりがな · 熟語 じゅくご · 画数 かくすう · 筆順 ひつじゅん
+
+      *Formation* — 成り立ち なりたち · 象形文字 しょうけいもじ · 指事文字 しじもじ ⚠ ·
+      会意文字 かいいもじ ⚠ · 形声文字 けいせいもじ
+
+      *Positions and radical names* — 偏 へん · 旁 つくり · 三水 さんずい · 立刀 りっとう ·
+      草冠 くさかんむり · 人偏 にんべん · 言偏 ごんべん · 病垂 やまいだれ ·
+      国構え くにがまえ · 列火 れっか
+
+      *Grammar* — 文法 ぶんぽう · 文 ぶん · 名詞 めいし · 動詞 どうし · 自動詞 じどうし ·
+      他動詞 たどうし · 形容詞 けいようし · 形容動詞 けいようどうし · 副詞 ふくし ·
+      助詞 じょし · 敬語 けいご
+
+      *Talking about words* — 意味 いみ · 発音 はつおん · 単語 たんご · 言葉 ことば ·
+      例 れい · 例文 れいぶん · 違い ちがい · 訳 やく · 辞書 じしょ · 説明 せつめい
+
+      *Ways of doing* — 読み方 よみかた · 書き方 かきかた · 言い方 いいかた ·
+      使い方 つかいかた · 練習 れんしゅう · 覚える おぼえる
+
+- [ ] **Open: phrases as cards, or only their vocabulary.** Candidates were
+      これは日本語で何と言いますか / どういう意味ですか / 何と読みますか /
+      〜と〜の違いは何ですか / 例文を教えてください, which between them need only four
+      more words (言う, 読む, 書く, 質問). Memorised phrases are useful immediately but
+      learned as blocks; component words generalise but do not hand you the sentence.
+      The stated preference is for *both*, with a stock of useful memorised sentences
+      alongside eventual practice at composing new ones — which makes sentence
+      *production* a card type this deck does not yet have, and a larger question than
+      the word list.
+
 ### Stroke thresholds
 
 - [ ] **Tune against real handwriting** — the machinery exists (`/calibrate`, captured
