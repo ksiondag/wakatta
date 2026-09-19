@@ -8,3 +8,4 @@ header{display:flex;gap:24px;align-items:center;flex-wrap:wrap;padding:18px 5vw;
 .token[data-reading]{position:relative}
 .token[data-reading]::after{content:attr(data-reading);position:absolute;bottom:100%;left:50%;transform:translateX(-50%);padding:2px 5px;border-radius:4px;background:var(--panel);color:var(--accent);font-size:.6em;line-height:1.25;white-space:nowrap;pointer-events:none;opacity:0;z-index:2}
 .token[data-reading]:hover::after,.token[data-reading]:focus-visible::after{opacity:1}
+.explanation-parts>div{padding:12px 0;border-top:1px solid var(--line)}.explanation-parts p{margin:4px 0}#explanationText{font-size:20px}#explanation{margin-top:20px;overflow-wrap:anywhere}

@@ -3,6 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import uuid
+from unittest.mock import patch
 from datetime import datetime,timedelta,timezone
 
 from fastapi import FastAPI, HTTPException
@@ -30,6 +31,15 @@ class StudyTests(unittest.TestCase):
 
     def tearDown(self):
         self.client.close();self.tmp.cleanup()
+
+    def test_explanations_use_source_text_and_reject_foreign_spans(self):
+        with patch('explanations.start',return_value='a'*64) as start:
+            response=self.client.post('/api/study/explanations',json={'cue_id':self.cues[0],'end_cue_id':self.cues[1]})
+            self.assertEqual(response.status_code,202)
+            start.assert_called_once_with('平和だなあ 普通の人生')
+        response=self.client.post('/api/study/explanations',json={'cue_id':self.cues[0],'end_cue_id':self.foreign})
+        self.assertEqual(response.status_code,422)
+        self.assertEqual(self.client.get('/api/study/explanations/not-a-key').status_code,404)
 
     def event(self, **kwargs):
         return study.Event(**dict(event_id=uuid.uuid4(),source_id=self.sid,action="watch",

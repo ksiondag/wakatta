@@ -32,7 +32,7 @@ function showCue(index){
  $('currentLine').dataset.cue=cue?.id||'';
  $('currentLine').innerHTML=cue?tokensHTML(cue)||'<span class="muted">♪</span>':'<span class="muted">Listen…</span>';
  $('rawLine').textContent=cue?.raw_text||'';
- for(const id of ['savePhrase','saveGrammar','replay','shadow','sing'])$(id).disabled=!cue;
+ for(const id of ['savePhrase','saveGrammar','explainLine','replay','shadow','sing'])$(id).disabled=!cue;
  if(cue){
   const row=$(`cue-${cue.id}`);row?.classList.add('active');
   if(row&&!video.paused&&!document.getSelection()?.toString()){
@@ -186,6 +186,35 @@ document.addEventListener('click',e=>{
 document.addEventListener('mouseup',()=>{if(selection())video.pause();});
 $('savePhrase').onclick=()=>save(source.kind==='song'?'lyric':'phrase');
 $('saveGrammar').onclick=()=>save('grammar');
+let explanationRequest=0;
+$('explainLine').onclick=async()=>{
+ const range=selection()||captureSpan();if(!range)return;
+ const request=++explanationRequest;
+ const first=cueMap.get(range.cue_id),last=cueMap.get(range.end_cue_id||range.cue_id);
+ const text=cues.slice(first.ordinal,last.ordinal+1).map(c=>c.text).join(' ');
+ $('explanation').hidden=false;$('explanationText').textContent=text;
+ $('explanationAnswer').replaceChildren();$('explanationStatus').textContent='Asking Astra…';
+ $('explainLine').disabled=true;
+ try{
+  const {id}=await api('/api/study/explanations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cue_id:range.cue_id,end_cue_id:range.end_cue_id})});
+  for(let attempt=0;attempt<240;attempt++){
+   if(request!==explanationRequest)return;
+   const result=await api(`/api/study/explanations/${id}`);
+   if(request!==explanationRequest)return;
+   if(result.status==='failed')throw new Error(result.error||'Explanation failed. Try again.');
+   if(result.status==='ready'){
+    const a=result.answer;
+    $('explanationStatus').textContent=`${result.model} · ${result.reasoning==='low'?'low reasoning':'thinking off'}${result.fallback_reason?' · local fallback':''} · AI explanation; may contain mistakes.`;
+    $('explanationAnswer').innerHTML=`<p><strong>${esc(a.translation)}</strong></p><div class="explanation-parts">${a.parts.map(p=>`<div><strong lang="ja">${esc(p.japanese)}</strong> <span lang="ja" class="muted">${esc(p.reading)}</span><p>${esc(p.meaning)}</p></div>`).join('')}</div><p>${esc(a.structure)}</p>`;
+    return;
+   }
+   $('explanationStatus').textContent=result.stage==='gemma'?'Astra unavailable; asking local Gemma…':'Asking Astra…';
+   await new Promise(resolve=>setTimeout(resolve,1000));
+  }
+  throw new Error('Still waiting. Try again to check the result.');
+ }catch(e){if(request===explanationRequest)$('explanationStatus').textContent=e.message;}
+ finally{if(request===explanationRequest)$('explainLine').disabled=!cues[active];}
+};
 $('saveWord').onclick=()=>save('word',{cue_id:wordCue.id,expression:word.surface,lemma:word.lemma,reading:word.lemma_reading});
 $('closeDictionary').onclick=()=>$('dictionary').close();
 $('hearWord').onclick=()=>{$('dictionary').close();replay(wordCue.ordinal);};

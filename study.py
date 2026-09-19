@@ -438,8 +438,37 @@ def create_router(path: Path = DB_PATH):
                 raise
             raise HTTPException(422,"Could not read this media file or timed transcript") from e
 
+    @router.post('/api/study/explanations', status_code=202)
+    def explain(req: ExplanationRequest):
+        import explanations
+        with connect(path) as db:
+            first=db.execute('SELECT * FROM cues WHERE id=?',(req.cue_id,)).fetchone()
+            last=db.execute('SELECT * FROM cues WHERE id=?',(req.end_cue_id or req.cue_id,)).fetchone()
+            if not first or not last:
+                raise HTTPException(404,'Subtitle not found')
+            if first['source_id']!=last['source_id'] or not 0<=last['ordinal']-first['ordinal']<=20:
+                raise HTTPException(422,'Choose a continuous subtitle span')
+            text=' '.join(r[0] for r in db.execute('SELECT text FROM cues WHERE source_id=? AND ordinal BETWEEN ? AND ? ORDER BY ordinal',
+                (first['source_id'],first['ordinal'],last['ordinal'])))
+        if not text.strip() or len(text)>4000:
+            raise HTTPException(422,'Choose a shorter spoken passage')
+        return {'id':explanations.start(text)}
+
+    @router.get('/api/study/explanations/{key}')
+    def explanation(key: str):
+        import explanations
+        try:
+            return explanations.get(key)
+        except (ValueError,FileNotFoundError):
+            raise HTTPException(404,'Explanation not found')
+
     return router
 
 
 class YouTubeRequest(BaseModel):
     url: str = Field(max_length=2000)
+
+
+class ExplanationRequest(BaseModel):
+    cue_id: int
+    end_cue_id: int | None = None

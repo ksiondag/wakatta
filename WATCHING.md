@@ -25,6 +25,37 @@ intervals are 3, 7, then 14 days. Overdue items remain available without a penal
 This is a repeat schedule, not a memory grade or evidence of JLPT mastery.
 Previously used sources also become candidates for replay after a day.
 
+## Explain a subtitle span
+
+“Explain this span” uses the current line and the next-line selector (or selected
+subtitle lines). It displays a translation, meaningful parts with hiragana
+readings, and a short structure explanation. Text selection chooses its containing
+subtitle span; the explanation keeps that full context.
+
+The first provider is Codex `gpt-6-astra` with low reasoning. A disposable tmux
+pane runs `codex exec` with a JSON output schema and writes `astra.json`.
+The pane closes when finished; the user's panes are preserved. The server must
+have access to the tmux session and an authenticated Codex installation. It uses
+`WAKATTA_TMUX_PANE`, then inherited `TMUX_PANE`, or tmux's default target.
+
+If tmux/Codex fails, exceeds its deadline, or returns invalid output, the job
+falls back to `gemma4:12b` via local Ollama with thinking off. Both providers
+use the same output shape and strict validation, including hiragana readings.
+The local generation schema omits length constraints that Ollama's grammar
+compiler rejected; validation still enforces those limits after generation.
+
+Files live in `data/explanations/<text-and-prompt-version-hash>/`:
+`prompt.txt`, `schema.json`, `astra.json`, and the validated `result.json` with
+provider information. Identical passages reuse their saved answer. No capture
+or Anki card is created. The UI identifies the provider and fallback use.
+One job runs at a time; model execution is bounded, and interrupted/failed jobs
+can be retried. Changing the prompt or schema requires bumping `VERSION` in
+`explanations.py` to invalidate cached answers.
+
+JSON validation checks structure, not factual accuracy. The test phrase produced
+a good Astra explanation; Gemma returned valid JSON but described one modifier's
+attachment imprecisely. Treat generated grammar explanations as assistance.
+
 ## What gets tracked
 
 Playback records actual sampled playing time and saves position; seeks and
@@ -84,7 +115,7 @@ recommendations are follow-up work after trying the capture/replay loop.
 ## Verification
 
 ```sh
-uv run python -m unittest tests.test_study
+uv run python -m unittest tests.test_study tests.test_explanations
 node --check static/watch.js
 node --check static/library.js
 node --check static/study-client.js
