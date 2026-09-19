@@ -6,6 +6,9 @@ and SRS-driven review.
 
 Initial target: **Nausicaä of the Valley of the Wind** (manga).
 
+The [repository audit](REPO_AUDIT.md) records the initial findings. The drill
+offers a 5/10/15-minute review budget and prefers Core 2000 vocabulary when available.
+
 ---
 
 ## Stack
@@ -19,7 +22,7 @@ Initial target: **Nausicaä of the Valley of the Wind** (manga).
 | Database | SQLite + SQLAlchemy |
 | Backend API | FastAPI + uvicorn |
 | Frontend | HTML5 Canvas (PWA target) |
-| SRS algorithm | FSRS |
+| SRS algorithm | Anki's configured scheduler (SM-2 or FSRS; local audit found SM-2) |
 | Kanji stroke data | KanjiVG + KANJIDIC2 |
 | Handwriting recognition | KanjiVG + DTW (`kanjivg_db.py`) |
 

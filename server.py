@@ -1615,8 +1615,8 @@ def anki_review_next(deck: str | None = None):
 async def anki_review_answer(req: ReviewAnswer, push: bool = True):
     """Answer a card, rating it from the interaction's observations where it can.
 
-    `validations` wins over `rating`: the whole point is that a production card is
-    graded by what was measured, not by what the reviewer thought of it.
+    An explicit `rating` wins over the validator's suggestion. The validator
+    supplies a fallback rating and feedback when validations are provided.
     """
     graded = None
     if req.validations is not None:

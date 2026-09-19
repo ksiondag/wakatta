@@ -34,6 +34,7 @@ html, body {
 .navbar {
   flex-shrink: 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 16px;
   padding: 8px 16px;
@@ -243,6 +244,14 @@ button.primary { border-color: #7070cc; background: #2e2e56; }
       <option value="session">Session (choose the cards)</option>
     </select>
     <select id="deck" title="Which deck to review"></select>
+    <label id="reviewBudget">Review time
+      <select id="budget" aria-label="Review time budget">
+        <option value="5">5 minutes</option>
+        <option value="10" selected>10 minutes</option>
+        <option value="15">15 minutes</option>
+      </select>
+      <span id="budgetRemaining"></span>
+    </label>
     <span class="spacer"></span>
     <span class="progress" id="counts"></span>
     <span class="progress" id="progress"></span>
@@ -255,6 +264,36 @@ button.primary { border-color: #7070cc; background: #2e2e56; }
 <script>
 const $ = id => document.getElementById(id);
 let queue = [], idx = 0, pads = [];
+
+// A time budget bounds a visit, without changing Anki's limits or grading a card.
+// Finish the card in front of you; the stopping point is before the next fetch.
+let reviewStartedAt = null;
+function budgetExpired() {
+  return reviewStartedAt !== null &&
+    performance.now() - reviewStartedAt >= Number($('budget').value) * 60000;
+}
+function updateBudget() {
+  $('reviewBudget').hidden = mode !== 'review';
+  if (reviewStartedAt === null) return;
+  const left = Math.max(0, Math.ceil((Number($('budget').value) * 60000 -
+    (performance.now() - reviewStartedAt)) / 1000));
+  $('budgetRemaining').textContent = left ?
+    `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} left` :
+    'Time reached — finish this card';
+}
+function showReviewStop() {
+  $('counts').textContent = '';
+  $('progress').textContent = '';
+  $('stage').innerHTML = `<div class="msg">
+    Review time complete. Return to your Japanese.<br><br>
+    Watch your next scene, or <a href="/page-reader">read something from your library</a>.
+    <br><br><button id="reviewMore">Start another short review</button>
+  </div>`;
+  $('reviewMore').onclick = () => {
+    reviewStartedAt = null;
+    startReview(activeDeck);
+  };
+}
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -846,7 +885,7 @@ async function endSession() {
 let SESSION_DECK = 'Wakatta Drill';
 let mode = new URLSearchParams(location.search).get('mode') || 'review';
 let reviewCard = null, shownAt = 0, activeDeck = null;
-const REVIEW_DECK = 'Japanese::Wakatta::Audio Writing';
+const REVIEW_DECK = 'Japanese::Core 2000';
 
 async function startPractice() {
   try { queue = await api('/api/anki/drill?limit=20'); }
@@ -977,7 +1016,7 @@ async function loadDeckPicker(preferred) {
   sel.innerHTML = usable.map(d =>
     `<option value="${d.name}">${d.name} — ${d.review + d.learning + d.new}` +
     `${d.filtered ? ' (session)' : ''}</option>`).join('');
-  // Prefer the derived writing deck, then a session deck, then whatever has work.
+  // Start with vocabulary recognition; writing remains available in the picker.
   const pick = [preferred, REVIEW_DECK, SESSION_DECK]
     .find(n => n && usable.some(d => d.name === n)) || (usable[0] && usable[0].name);
   if (pick) sel.value = pick;
@@ -986,28 +1025,28 @@ async function loadDeckPicker(preferred) {
 }
 
 async function startReview(deck) {
+  if (budgetExpired()) { showReviewStop(); return; }
   const target = deck || await loadDeckPicker(deck) || REVIEW_DECK;
   $('deck').value = target;
   let r;
   try { r = await api(`/api/anki/review/next?deck=${encodeURIComponent(target)}`); }
   catch (e) { $('stage').innerHTML = `<div class="err">${e.message}</div>`; return; }
   if (r.error) {
-    // A missing deck here is almost always "nothing derived yet", not a real error.
     $('stage').innerHTML = `<div class="msg">Nothing to review in <code>${target}</code>.<br><br>` +
-      `Derived writing cards are created from the <a href="/anki">Anki browser</a> — ` +
-      `pick a note, then Preview and Create.<br>Or switch to <b>Session</b> above to ` +
-      `choose any cards you like.</div>`;
+      `Choose another deck above, or return to your Japanese.</div>`;
     return;
   }
   $('counts').textContent = `new ${r.counts.new} · learning ${r.counts.learning} · due ${r.counts.review}`;
   if (!r.card) {
     $('stage').innerHTML = `<div class="msg">Nothing due in <code>${target}</code>.<br><br>` +
-      `If you've just derived cards, the deck inherits <code>new/day = 0</code> from the ` +
-      `Japanese preset — raise it, or give the subdeck its own preset.</div>`;
+      `You're done for now. Watch your next scene, or ` +
+      `<a href="/page-reader">read something from your library</a>.</div>`;
     return;
   }
   activeDeck = target;
   reviewCard = r.card;
+  if (reviewStartedAt === null) reviewStartedAt = performance.now();
+  updateBudget();
   if (reviewCard.interaction === 'audio_writing') {
     queue = [reviewCard]; idx = 0; render(); shownAt = Date.now();
   } else {
@@ -1091,6 +1130,9 @@ $('mode').onchange = () => {
 
 $('mode').value = mode;
 $('deck').style.display = mode === 'review' ? '' : 'none';
+$('budget').onchange = updateBudget;
+updateBudget();
+setInterval(updateBudget, 1000);
 mode === 'review' ? startReview() : mode === 'session' ? renderSession() : startPractice();
 </script>
 </body>
