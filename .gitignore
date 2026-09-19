@@ -4,9 +4,28 @@ __pycache__/
 .venv/
 
 
-# Data (large, re-downloadable)
+# Local media, databases, captures, generated answers, and personal notes.
+# Some are irreplaceable: ignored does not mean backed up.
 data/
 models/
+
+# Guard against accidentally importing media/decks outside data/.
+*.mp4
+*.mkv
+*.webm
+*.m4a
+*.mp3
+*.wav
+*.ogg
+*.opus
+*.srt
+*.vtt
+*.apkg
+*.colpkg
+*.anki2
+*.db
+*.sqlite
+*.sqlite3
 
 # Generated debug images
 page_sample.png
@@ -21,3 +40,5 @@ vendor/
 
 # Secrets
 .env
+.env.*
+!.env.example

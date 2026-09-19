@@ -42,6 +42,7 @@ import kanjivg_db
 import reading_order
 import stroke_calibration
 import stroke_validation
+import study
 
 load_dotenv()
 
@@ -652,6 +653,11 @@ async def lifespan(app: FastAPI):
     PAGES_DIR.mkdir(parents=True, exist_ok=True)
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
+    study.build_schema()
+    # Jobs are local to this process; an interrupted preparation can be retried.
+    with study.connect() as db:
+        db.execute("UPDATE sources SET status='failed',error='Preparation was interrupted; try again' "
+                   "WHERE status IN ('queued','copying','converting','indexing')")
     _ensure_order_locked_column()
     _ensure_continues_into_column()
     if _ensure_order_index_column():
@@ -723,6 +729,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+app.include_router(study.create_router())
 
 
 # ── Pydantic schemas ───────────────────────────────────────────────────────────

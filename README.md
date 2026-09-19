@@ -9,6 +9,15 @@ Initial target: **Nausicaä of the Valley of the Wind** (manga).
 The [repository audit](REPO_AUDIT.md) records the initial findings. The drill
 offers a 5/10/15-minute review budget and prefers Core 2000 vocabulary when available.
 
+Open **[/library](http://localhost:8000/library)** for anime, captioned listening,
+and existing manga. Media and personal study history are local and are not
+included in a checkout.
+The player supports subtitle dictionary lookups, contextual captures, bounded
+replays, resume history, and explicit shadowing/singing records. The library
+suggests captures to revisit and familiar material to return to.
+See [watching and listening guide](WATCHING.md) for the daily loop, imports,
+tracking limits, and verification commands.
+
 ---
 
 ## Stack
